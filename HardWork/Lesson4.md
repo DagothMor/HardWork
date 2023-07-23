@@ -1,337 +1,129 @@
-﻿Подумал касаемо того что из себя программа вообще должна представлять, начал с расплывчатого ТЗ.
-
-Прокси должен являться управляемой оболочкой для пользователя и определенным флагом для драйвера. Пользователь должен работать только с теми расширениями и программами которыми разрешит администратор/ корпоративная политика. Драйвер благодаря прокси разделяет манипуляции с файлами и явную от пользователя попытку открыть/закрыть документ.
-
-Попробую переписать логику запуска прокси
-
-Логический дизайн прокси:
-Прокси запускается получая значения в аргументах.
-В зависимости от полученных аргументов(ключ слов) происходят разные сценарии например:
-
-"Create docx","create pdf "... - Создать документ с определенным расширением и открыть его.
-"ПУТЬ/ИМЯ_ФАЙЛА.РАСШИРЕНИЕ" - Открыть документ по умолчанию.
-"ПУТЬ/ИМЯ_ФАЙЛА.РАСШИРЕНИЕ", "ИМЯ_ПРИЛОЖЕНИЯ" - Открыть документ с определенным приложением.
-
-Несложно понять что сценариев 3, но они могут увеличиться, как правильно в таком случае поступитacь? Не будем фильтровать по количеству аргументов, скорее по наличию файла с которым нужно будет работать.
-
-```
-Начало программы.
-
-Если аргументов 0 -> выводим ошибку
-
-Если в аргументах нет существующего файла -> Пытаемся проинициализировать аргументы в списке ключ-слов
-и после завершаем программу(ветка без файла).
-
-Если расширение существующего файла не поддерживается -> Выводим ошибку.
-
-Пытаемся получить имя поддерживаемой исполняемой программы из аргументов. 
-
-В случае неудачи, указываем исполняемую программу по умолчанию с помощью раннее созданного
-класса programManager
-
-Создаем экземпляр FileManager передавая расширение и программу.
-
-Пытаемся открыть документ.
-Ожидаем закрытия документа.
-
-Конец программы.
-```
-
-Во время написания сценария стало понятно что пользователь может захотеть создать шаблонный документ в определенной папке, возможно ли это и отлаживается ли, пока неизвестно из за редактора реестра, однако расширять и изменять логику уже станет легче из за разделения сценариев.
-посмотрим на текущую реализацию
-
-___
-
-# КОД ДО 
-Итого стартовый метод работал таким образом:
-```cs 
-void AppStartup(object sender, StartupEventArgs e)
-        {
-            var proxyConfig = // инициализация корпоративного конфигурационного файла 1
-            var coreConfig = // инициализация корпоративного конфигурационного файла 2
-
-            string filePath = FullFilePathFromStartUpArguments(e);
-
-            if (!FilePathIsExist(filePath))
-            { 
-            // Только для тестов, убрать при релизе. сделать список поддерживаемых расширений и пройтись по нему если exe с пустыми аргументами.
-                CheckRegistry(".docx"); CheckRegistry(".pdf"); 
-                return;
-            }
-
-            string fileExtension = Path.GetExtension(filePath).ToLower();
-            if (!FileExtensionIsSupported(fileExtension)) return;
-
-            // Только для тестов, убрать при релизе.
-            CheckRegistry(fileExtension);
-
-            string executablePath;
-            if (ExecutablePathIsExist(fileExtension, out executablePath)) return;
-
-            //bool isAuthorized = false;
-
-            //using (MarkManager mc = new MarkManager(coreConfig.ClientUrl, filePath))
-            //{
-            //    isAuthorized = mc.AuthorizationUserByDocument();
-            //}
-            try
-            {
-                OpenDocument(executablePath, fileExtension, filePath);
-            }
-            catch (Exception ex)
-            {
-                //Logger.Trace($"Exception:{ex}");
-                MessageBox.Show("ACCESS DENIED.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                //throw;
-            }
-            // Аномальное плавающее поведение, экземпляр открывается то в ридонли то стандартно.
-            //RegistryHelper.ClearWord16OpenedFilesCache();
-            Application.Current.Shutdown();
-
-        }
-```
-
-Как видим беспорядок, в целях лжеэкономии времени проверяли работу чисто с word, но никак не с другими приложениями. Хотя недавно в рамках исследования пробовал создавать файл через прокси, создавая ярлык и перекидывая в аргумент ключ слово "Create", переписывать логику и отлаживать пару часов было неприятно, страшно представить что было бы будь это более глобальным и масштабным приложением.
-
-для сценария с файлом создадим класс и интерфейс, в нем будет метод open document.
-```cs
-public interface IFileManager
-    {
-        /// <summary>
-        /// Открыть документ.
-        /// </summary>
-        void OpenDocument();
-    }
-```
-
+﻿
+## 1
+По началу не задавался вопросом во время создания мониторинга процессов, а почему он вообще должен мониторить? Почему при смерти процесса мы должны стирать кеш по PID'у
 ```cs
     /// <summary>
-    /// Менеджер для документа.
+    /// Класс мониторящий события создания\удаления процессов.
     /// </summary>
-    public class FileManager : IFileManager
-    {
-        private string _executablePath;
-        private string _filePath;
-        
-        public FileManager(string filePath,string executablePath)
+public class ProcessMonitor{
+
+//  ...
+
+		/// <summary>
+        /// Метод, при получении уведомления об удалении процесса прокси, отправляет событие закрытия документа,
+        /// поскольку по логическому дизайну у нас связь: один документ - один процесс.
+        /// </summary>
+        /// @attention Выход из "бесконечного цикла" осуществляется по флагу cancellationToken.
+        private void StartProxyWatcherWin()
         {
-            _filePath = filePath;
-            _executablePath = executablePath;
+            //Logger.Trace($"[{Thread.CurrentThread.ManagedThreadId}]{nameof(ProcessMonitor)}.{nameof(StartProxyWatcherWin)}. ->");
+            string processName = "Proxy.exe";
+            string query = $"SELECT * FROM __InstanceDeletionEvent WITHIN 1 " +
+                $"WHERE TargetInstance ISA 'Win32_Process' " +
+                $"AND (TargetInstance.Name = '{processName}')";
+            try
+            {
+                using (ManagementEventWatcher watcher = new ManagementEventWatcher(query))
+                {
+                    watcher.EventArrived += (sender, e) =>
+                    {
+                        ManagementBaseObject targetInstance = (ManagementBaseObject)e.NewEvent.Properties["TargetInstance"].Value;
+                        string processName = targetInstance["Name"].ToString();
+                        int processId = Convert.ToInt32(targetInstance["ProcessId"]);
+                        //Logger.Trace($"##### Proxy with PID: {processId} is dead.");
+                        if (_workingProxyCache.workingProxyCache.ContainsKey(processId))
+                        {
+                            //Logger.Trace($"##### Sending event document {_workingProxyCache.workingProxyCache[processId]} is closed.");
+                            _notificationProcessor.AddSendEventMessage(new ClientEventMessage(_workingProxyCache.workingProxyCache[processId], eEventType.CloseDocEvent));
+                            //Logger.Trace($"##### Removing {processId} from ProxyPIDCache");
+                            _workingProxyCache.workingProxyCache.Remove(processId);
+                        }
+                    };
+                    watcher.Start();
+
+                    while (!_cancellationTokenSrc.IsCancellationRequested)
+                    {
+                        // Необходимо добавить некоторую паузу в выполнении потока, иначе ЦПУ сильно нагружается
+                        Thread.Sleep(500);
+                    }
+                    watcher.Stop();
+                }
+
+            }
+            catch (Exception e)
+            {
+                //Logger.Error($"[{Thread.CurrentThread.ManagedThreadId}]{nameof(ProcessMonitor)}.{nameof(StartProxyWatcherWin)}. Error: {e}");
+            }
         }
-        public void OpenDocument()
+
+```
+После комментирования метода StartProxyWatcherWin становится виднее и более понятно на глобальном уровне ПОЧЕМУ мы ловим удаление процесса и в последствии чистим кеш.
+
+## 2
+Комментирование глобального характера напрашивалось само по себе, логично что нужно объяснить почему мы создаем класс и пытаемся достучаться до документа без каких либо дальнейших действий, в других проектах это был бы рудимент, но тут  важнейшая часть кода, поскольку проверка метаданных происходит в другом проекте.
+```cs
+        /// <summary>
+        /// Стартует процесс открытия документа.
+        /// </summary>
+        /// <param name="executablePath">Путь к исполняемому файлу.</param>
+        /// <param name="fileExtension">Расширение файла.</param>
+        /// <param name="filePath">Путь к документу.</param>
+        public static void OpenDocument(string executablePath, string fileExtension, string filePath)
         {
             //Logger.Trace($"Trying read file");
             try
             {
                 // Посылаем сигнал драйверу, если драйвер(агент) откажет в открытии, то
                 // Выскочет исключение access
-                using (StreamReader reader = new StreamReader(_filePath))
+                // Для того чтобы проверить доступ к файлу по типу метки, мы создаем обьект который будет стучаться
+                // к файлу. Драйвер получит попытку вызова(где PID - наш прокси), прочитает тип метки, 
+                // доступ текущего пользователя и, в случае успеха, предоставит доступ, 
+                // в случае неудачи выскочет ошибка об отстутствии доступа
+                using (StreamReader reader = new StreamReader(filePath))
                 {
 
                 }
-                //Logger.Trace($"executablePath: {_executablePath}, fileExtension:{_fileExtension}, {_filePath}");
-                Process myProcess = new Process();
-                myProcess.StartInfo.FileName = _executablePath;
-                myProcess.StartInfo.Arguments += "\"" + _filePath + "\"";
-                myProcess.Start();
-                myProcess.WaitForExit();
-            }
-            catch (Exception ex)
-            {
-                //Logger.Trace($"##### Exception {ex}");
-                MessageBox.Show("ACCESS DENIED", "ERROR", MessageBoxButton.OK, MessageBoxImage.Error);
-                return;
-            }
-        }
-    }
 ```
-
-# КОД ПОСЛЕ
+Уверен что без этого комментария другой человек подумал бы что это какой то рудимент, и с чистой совестью удалил этот участок кода, однако в дальнейшем он потратит минимум день на то чтобы понять, а почему все сломалось. И чья это вина если не моя.
+# 3 
+В комментарии указал, почему этот метод ДОЛЖЕН вызываться а так же ЧТО ИМЕННО должен делать, поскольку без очистки кеша ворда выскакивает аномальное поведение.
 ```cs
-        void AppStartup(object sender, StartupEventArgs e)
+/// <summary>
+        /// Из за вызова этой функции почему то документ открывается в ридонли, может нужно пропускать первый item?
+        /// Word хранит в реестре документы с которыми он работал ранее, поскольку PID прокси связан только с одним
+        /// документом то может выскакивать очень много уведомлений об отказе в доступе к документу (Экземпляр ворда
+        /// стучится к открывавшимся ранее документам 2 3 4, хотя в кеше его пид связан с документом 1).
+        /// </summary>
+        public static void ClearWord16OpenedFilesCache()
         {
-            var proxyConfig = // инициализация корпоративного конфигурационного файла 1
-            var coreConfig = // инициализация корпоративного конфигурационного файла 2
+            const string registryPath = @"SOFTWARE\Microsoft\Office\16.0\Word\File MRU";
+            const string valuePrefix = "Item ";
 
-            // Отладка списка программ по умолчанию, в будущем реализовать конструктор который
-            // принимает класс Config из proxyConfig и сам парсит в словарь.
-            var programManager = new ProgramManager();
-            FileManager fileManager;
+            RegistryKey key = Registry.CurrentUser.OpenSubKey(registryPath, true);
 
-            if (e.Args.Length == 0)
+            // Проверяем, что ключ существует
+            if (key != null)
             {
-                //Logger.Error($"Args.Length == 0");
-                MessageBox.Show("ARGS not found.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                Application.Current.Shutdown();
-            }
+                // Получаем список всех значений внутри ключа
+                string[] valueNames = key.GetValueNames();
 
-            string filePath = FullFilePathFromStartUpArguments(e);
-
-            if (String.IsNullOrEmpty(filePath))
-            {
-                //TODO: здесь можно реализовывать различные действия если в аргументах
-                // будут находиться слова-триггеры.
-                Application.Current.Shutdown();
-                return;
-            }
-
-            string fileExtension = Path.GetExtension(filePath).ToLower();
-
-            if (!programManager.ExtensionIsSupported(fileExtension))
-            {
-                MessageBox.Show("Extension of this document is not supported.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                Application.Current.Shutdown();
-                return;
-            }
-            
-            var supportedProgram = programManager.GetSupportedProgramFromArgs(e.Args);
-
-            if (String.IsNullOrEmpty(supportedProgram))
-            {
-                supportedProgram = programManager.GetDefaultProgram(fileExtension);
-            }
-
-            fileManager = new FileManager(filePath, supportedProgram);
-
-            fileManager.OpenDocument();
-
-            // Аномальное плавающее поведение, экземпляр открывается то в ридонли то стандартно.
-            //RegistryHelper.ClearWord16OpenedFilesCache();
-            Application.Current.Shutdown();
-
-        }
-```
-
-Как видно из кода после, логика стала максимально приближенной к дизайну. Переписывание заняло много времени из за описания ТЗ и логической архитектуры, которая сподвигла на дальнейшее обдумывание ЧТО нужно сделать(какую смысловую нагрузку и для каких случаев должен взять на себя интерфейс менеджера файла.)
-___
-
-# Сценарий ключ слов
-Во время исследования создания файла учитывая FileFilterSystem была реализована логика создания/пересоздания файла из шаблона через прокси
-
-```
-Если в аргументах нет существующего файла -> Пытаемся проинициализировать аргументы в списке ключ-слов
-и после завершаем программу(ветка без файла).
-Если есть ключ слово create docx ->
-- Создаем новый процесс ProxyFileCreator
-- Передаемв аргументы расширение по которому нужно создать документ
-- ждем выполнения
-- если в шаблонном пути нет шаблонного файла выводим ошибку и завершаем работу
-- открываем шаблонный документ по умолчанию
-```
-# КОД ДО
-```cs
-bool createDOCXFromStartUpArguments = CreateDOCXFromStartUpArguments(e);
-            if (createDOCXFromStartUpArguments)
-            {
-                Process myProcess = new Process();
-                myProcess.StartInfo.FileName = PROXY_FILE_CREATOR_PATH;
-                myProcess.StartInfo.Arguments += "docx";
-                myProcess.Start();
-                myProcess.WaitForExit();
-
-                // Проверяем, удачно ли создался файл.
-                if (!File.Exists(CREATED_DOCUMENT_PATH))
+                foreach (string valueName in valueNames)
                 {
-                    //Logger.Error($"##### File is not exist!!! : {CREATED_DOCUMENT_PATH}");
-                    Application.Current.Shutdown();
-                }
-
-                filePath = CREATED_DOCUMENT_PATH;
-                if (ExecutablePathIsExist(DOCX_EXTENSION, out executablePath)) return;
-                try
-                {
-                    OpenDocument(executablePath: executablePath, fileExtension: DOCX_EXTENSION, filePath: filePath);
-                }
-                catch (Exception ex)
-                {
-                    //Logger.Error($"Exception:{ex}");
-                    MessageBox.Show("ACCESS DENIED.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                    throw ex;
-                }
-                // чистим кеш в word
-                RegistryHelper.ClearWord16OpenedFilesCache();
-                Application.Current.Shutdown();
-                return;
-            }
-
-```
-
-ProxyFileCreator отдельный проект который будет создаваться ради пере/создания файла в шаблонном стандартном пути из внутреннего хранилища шаблонных документов.
-Вариант создания шаблонного файла через ProxyFileCreator обязателен поскольку его имя мы зарегистрируем в драйвере, он же в свою очередь будет игнорировать все действия которые приложение будет выполнять.
-```
-Если в аргументах есть docx -> 
-- Если файл существует в шаблонном пути то удаляем его
-- Копируем файл в шаблонный путь из внутреннего хранилища.
-```
-Реализация
-```cs
-static void Main(string[] args)
-        {
-            if (args.Contains("docx")) 
-            {
-                CreatingTemplateDocument();
-            }
-        }
-        private static void CreatingTemplateDocument()
-        {
-
-            string sourceFile = TEMPLATE_DOCX_PATH;
-            string destinationFileName = CREATED_DOCUMENT_PATH;
-            try
-            {
-                // Проверяем, существует ли файл
-                if (File.Exists(destinationFileName))
-                {
-                    // Если файл существует, удаляем его
-                    File.Delete(destinationFileName);
-                }
-                File.Copy(sourceFile, destinationFileName);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine(ex);
-                throw ex;
-            }
-        }
-```
-Благодаря предыдущей разработке вместо метода создадим экземпляр ранее проработанного FileManager
-
-# КОД ПОСЛЕ
-```cs
-//TODO: здесь можно реализовывать различные действия если в аргументах
-                // будут находиться слова-триггеры.
-                if (CreateDOCXFromStartUpArguments(e))
-                {
-                    Process myProcess = new Process();
-                    myProcess.StartInfo.FileName = PROXY_FILE_CREATOR_PATH;
-                    myProcess.StartInfo.Arguments += "docx";
-                    myProcess.Start();
-                    myProcess.WaitForExit();
-
-                    // Проверяем, удачно ли создался файл.
-                    if (!File.Exists(CREATED_DOCUMENT_PATH))
+                    // Проверяем префикс значения
+                    if (valueName.StartsWith(valuePrefix))
                     {
-                        //Logger.Error($"##### File is not exist!!! : {CREATED_DOCUMENT_PATH}");
-                        Application.Current.Shutdown();
+                        //Logger.Trace($"Deleting {valueName}.");
+                        // Удаляем значение
+                        key.DeleteValue(valueName);
                     }
-
-                    filePath = CREATED_DOCUMENT_PATH;
-                    supportedProgram = programManager.GetDefaultProgram(fileExtension);
-                    fileManager = new FileManager(filePath, supportedProgram);
-
-                    fileManager.OpenDocument();
-
-                    // Аномальное плавающее поведение, экземпляр открывается то в ридонли то стандартно.
-                    //RegistryHelper.ClearWord16OpenedFilesCache();
-                    Application.Current.Shutdown();
-                    return;
                 }
-                if (CreatePDFFromStartUpArguments(e))
-                {
-                    Application.Current.Shutdown();
-                    return;
-                }
-                Application.Current.Shutdown();
+
+                key.Close();
                 return;
+            }
+            //Logger.Error($"key {registryPath} == null !!!");
+        }
 ```
-Понял что лучше всего до начала кода писать логический дизайн, особенно когда задача абстрактная с большим количеством внешних факторов, поскольку мне стало легче добавлять новую логику(ключслова вместо открытия документа), и в будущем, ведь что если пользователь захочет открыть новый документ в определенной программе? По логическому дизайну легко понять что и где добавить. Однако работается конечно тяжелее, нужно больше концетрироваться и расписывать возможные негативные сценарии, и еще больше плевать в потолок чтобы голова дальше размышляла в расфокусе...
+В последнем выводе хотел бы наверно дополнить что немаловажно рассказать и о негативном сценарии, при пропуске/изменении этого метода, что может произойти если проигнорировать/изменить поведение функции именно в глобальной работе программы.
+
+Комментарии писать нужно. не КАК а ПОЧЕМУ.

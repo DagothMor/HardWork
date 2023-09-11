@@ -1,217 +1,133 @@
-﻿
-1.1. 
+﻿# 1 Слишком большой метод
 
-Не смог найти каких либо намеков на подобное, только если гипотетически генерировать множество обьектов и их взаимодействие, но фиксится я как понимаю чисто MOCK классом.
-___
-1.2. 
-Проблема в том что принимая сигнал драйвера мы вызываем метод его обработки, в котором вызывается проверка исполняемого файла(WINWORD.EXE с которым мы работаем или же searchprotocol.exe который мы пропускаем), далее проверка файла(Шаблонный ли что означает с спец символами -$), если процесс от проводника, то погружаемся дальше, какой тип вызова, стоит ли дальше идти проверяя метку документа...
-Не вижу иного варианта как переписывать с нуля функционально(опыта пока что к сожалению нет + там столько глобальных переменных и возможных хитросплетений пользователя что нужно нормально погрузиться в это, собственно былоб желанию да ума не хватает:) 
-___
-1.3.
-1 Метод реализует отправку сообщения на сервер, однако eventDTO генерировался внутри метода.
-1 До
-```cs
-public static bool TrySendEvent(
-            ClientApiManager clientApiManager,
-            eEventType eventType,
-            string filePath,
-            ContextDto context,
-            Guid markerGuid,
-            Guid metadataGuid,
-            string authorName)
-        {
-	        // 
-	    }
-```
-1 После
-```cs
-public static bool TrySendEvent(
-            ClientApiManager clientApiManager,
-            EventDTO eventdto)
-        {
-	        // 
-	    }
-```
-
-2 Метод обрабатывает неправильное слово(ранее оно не было найдено в префиксном дереве выражающем словарь правильных слов), запуская 
-рекурсивный обход по тому же префиксному дереву, с рядом начальных значений, которые в дальнейшем будут изменяться().
-
-2 До
-```cs
-public List<string> GetPossibleCorrections(string wrongWord)
-        {
-            if (wrongWord == null)
-                return null;
-
-            List<string> listWordsWithOneEdit = new List<string>();
-            List<string> listWordsWithTwoEdit = new List<string>();
-
-            DFS(root, wrongWord, ref listWordsWithOneEdit, ref listWordsWithTwoEdit,0,10,0,0);
-            return listWordsWithOneEdit.Any() ? listWordsWithOneEdit : listWordsWithTwoEdit;
-        }
-
-public void DFS(Node<T> node, string wrongWord, ref List<string> listWordsWithOneEdit, ref List<string> listWordsWithTwoEdit, int charNumber, int lastIter, int deletions, int changes)
-        {
-            //Console.WriteLine(node.Prefix + "|" + charNumber + "|" + deletions + "|"+ changes);
-            if (changes > 2 || node.Used[deletions,changes])
-            {
-                return;
-            }
-            node.Used[deletions,changes] = true;
-            if (charNumber == wrongWord.Length && node.IsWord) 
-            {
-                if (changes == 1)
-                {
-                    listWordsWithOneEdit.Add(node.Prefix);
-                }
-                else if (changes == 2)
-                {
-                    listWordsWithTwoEdit.Add(node.Prefix);
-                }
-            }
-
-            // Удаление
-            if (lastIter > 0 && charNumber < wrongWord.Length) 
-            {
-                DFS(node, wrongWord, ref listWordsWithOneEdit, ref listWordsWithTwoEdit, charNumber+1, 0,deletions+1,changes+1);
-            }
-            // Вставка
-            if (lastIter > 1)
-            {
-                foreach (var subnode in node.SubNodes)
-                {
-                    DFS(subnode.Value, wrongWord, ref listWordsWithOneEdit, ref listWordsWithTwoEdit, charNumber, 1,deletions,changes+1);
-                }
-            }
-            // Дальше проход.
-            if (charNumber < wrongWord.Length && node.SubNodes.ContainsKey(wrongWord[charNumber]))
-            {
-                DFS(node.SubNodes[wrongWord[charNumber]], wrongWord, ref listWordsWithOneEdit, ref listWordsWithTwoEdit, charNumber+1, 2,deletions,changes);
-            }
-        }
-```
-После 
-```cs
-public List<string> GetPossibleCorrections(string wrongWord)
-        {
-            if (wrongWord == null)
-                return null;
-
-            List<string> listWordsWithOneEdit = new List<string>();
-            List<string> listWordsWithTwoEdit = new List<string>();
-            var accumulator = new DFSAccumulator();
-            DFS(root, wrongWord, ref listWordsWithOneEdit, ref listWordsWithTwoEdit,ref accumulator);
-            return listWordsWithOneEdit.Any() ? listWordsWithOneEdit : listWordsWithTwoEdit;
-        }
-        public void DFS(Node<T> node, string wrongWord, ref List<string> listWordsWithOneEdit, ref List<string> listWordsWithTwoEdit,ref DFSAccumulator accumulator)
-        {
-            //Console.WriteLine(node.Prefix + "|" + charNumber + "|" + deletions + "|"+ changes);
-            if (accumulator.Changes > 2 || node.Used[accumulator.Deletions, accumulator.Changes])
-            {
-                return;
-            }
-            node.Used[accumulator.Deletions, accumulator.Changes] = true;
-            if (accumulator.CharNumber == wrongWord.Length && node.IsWord) 
-            {
-                if (accumulator.Changes == 1)
-                {
-                    listWordsWithOneEdit.Add(node.Prefix);
-                }
-                else if (accumulator.Changes == 2)
-                {
-                    listWordsWithTwoEdit.Add(node.Prefix);
-                }
-            }
-
-            // Удаление
-            if (accumulator.LastIter > 0 && accumulator.CharNumber < wrongWord.Length) 
-            {
-                accumulator.CharNumber += 1;
-                accumulator.Deletions += 1;
-                accumulator.Changes += 1;
-                accumulator.LastIter = 0;
-                DFS(node, wrongWord, ref listWordsWithOneEdit, ref listWordsWithTwoEdit,ref accumulator);
-            }
-            // Вставка
-            if (accumulator.LastIter > 1)
-            {
-                foreach (var subnode in node.SubNodes)
-                {
-                    accumulator.Changes += 1;
-                    accumulator.LastIter = 1;
-                    DFS(subnode.Value, wrongWord, ref listWordsWithOneEdit, ref listWordsWithTwoEdit,ref accumulator);
-                }
-            }
-            // Дальше проход.
-            if (accumulator.CharNumber < wrongWord.Length && node.SubNodes.ContainsKey(wrongWord[accumulator.CharNumber]))
-            {
-                accumulator.CharNumber += 1;
-                accumulator.LastIter = 2;
-                DFS(node.SubNodes[wrongWord[accumulator.CharNumber]], wrongWord, ref listWordsWithOneEdit, ref listWordsWithTwoEdit,ref accumulator);
-            }
-        }
-```
-Методы до получались громоздкими и очень легко было ошибиться в правильности порядка, отлаживать было бы той еще мукой, когда ты вроде должен был передать штраф за неправильную букву в удалении, а на самом деле опять же будто ее заменяешь.
-
-К сожалению из за нескольких сценариев хвостовую рекурсию прикрутить не смогу, ибо под двумя модификациями(максимальный штраф 2) имеется в виду удаление И/ИЛИ изменение 
-___
-
-1.4. 
-
- Когда велась разработка класса FileManager. У IFileManager был только единственный метод Open(), отвечающий за открытие документа. В этом методе при отсутствии метадаты у открываемого документа, он генерировал новую. Только недавно пришлось реализовывать альтернативу создания документа через ПКМ, там же интерфейс IFileManager был расширен методом GenerateNewMetadata, таким образом уменьшилось сложность чтения кода, ибо непонятно открываем ли мы документ, либо специально проставляем метку.
-До
-```cs
- using (IFileManager file = new FileManager(TEMPLATE_DOCX_PATH, _currentContext, needSaveToFile: true, needCreatePublicMarker: true))
-            {
-            try
-            {
-	            file.Open();
-            }
-	        catch (Exception ex)
-            {
-	            //Logger.Error($"ERROR: {ex}");
-	            return false;
-            }
-            finally
-            {
-	            return true;
-            }
-            }
-```
- После
-```cs
-            using (IFileManager file = new FileManager(TEMPLATE_DOCX_PATH, _currentContext, needSaveToFile: true, needCreatePublicMarker: true))
-            {
-                var success = file.CreateMetadataForTemplateDocument();
-                if (!success)
-                {
-                    //Logger.Error($"[{Thread.CurrentThread.ManagedThreadId}]{nameof(NotificationProcessor)}. ##### SOMETHING WAS WRONG.");
-                    return false;
-                }
-            }
-
-```
-1.5. Чрезмерный результат. Метод возвращает больше данных, чем нужно вызывающему его компоненту.
-
-Тоже не нашел к сожалению ярких примеров. На ум приходит только злоупотребление выходным параметром out. Правильное применение тот же Int32.TryParse(string numbers,out int number). Этот метод не только говорит нам об успешности операции, но и результатом парсинга. Подобное я реализовывал при обработке аргументов при вызове приложения.
+При вызове метода отправки на сервер уведомления передавая в параметры путь к файлу, его родителя и тип события не учитывался тот факт, что в зависимости от типа событий мы должны произвести массу дополнительных действий. Обработчик может послать уведомление еще не создавшегося файла(событие копирования), или даже если он начал существовать, нужно изменить его метаданные(в частности создать новый идентификатор для дочернего файла, иначе может произойти путаница, изменен файл по  С/11/22//док.docx, а на сервере отобразится, что изменился файл С/11/док.docx).
+Посмотрим на примере
+## 1 до
 ```cs
 /// <summary>
-        /// Если нету аргумента с существующим файлом, то уведомляем.
+        /// Отправить сообщение-событие "клиента".
         /// </summary>
-        /// <param name="FilePath">Путь к документу.</param>
-        /// <param name="exePath">Путь к исполняемому файлу.</param>
-        /// <returns>Путь к исполняемому файлу существует.</returns>
-        public static bool ExecutablePathIsExist(string FilePath, out string exePath)
+        /// <param name="eventMsg">Сообщение-событие для отправки на web сервер клиента.</param>
+        /// @todo Переделать получение глобальные _guidMarker, _guidDoc, _usernameDoc для которых нет открытия
+        /// службой файла.
+        private void SendEventMessage(ClientEventMessage eventMsg)
         {
-            var executablePath = RegistryHelper.GetExecutablePath(FilePath);
-            if (String.IsNullOrEmpty(executablePath))
+	        ///...
+            /// Инициализация, проверка на Null, получение СИД пользователя.
+            
+            //____________________________________
+            if (eventMsg.DocEvent == eEventType.CopyDocEvent)
             {
-                //Logger.Error($"Exe in {executablePath} not found.");
-                MessageBox.Show("Exe not found.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                exePath = String.Empty;
-                return true;
+                if (String.IsNullOrEmpty(eventMsg.CloningFileName))
+                {
+                    return;
+                }
+                int countOfTryies = 0;
+                while (true)
+                {
+                    try
+                    {
+                        MetadataDto newMetadataDTO = null;
+                        var parentMetadata = _fileDataCache.TryGet(eventMsg.CloningFileName);
+                        if (parentMetadata == null)
+                        {
+                            countOfTryies++;
+                            Thread.Sleep(1000);
+                            continue;
+                        }
+                        bool metadataAreEqual;
+                        
+                        // Чтобы избежать ошибки что документ не был открыт, открываем документ.
+                        IFileManager firstFileGetMetadata = new FileManager(eventMsg.FileName, eventMsg.Context, needSaveToFile: true, needCreatePublicMarker: true);
+
+                        var tempMetadata = firstFileGetMetadata.Metadata;
+                        
+                        metadataAreEqual = tempMetadata.Id == parentMetadata.Metadata.Id;
+                        
+                        // проставить булеву, чтобы не вызывали CreateMetadataForChild.
+                        firstFileGetMetadata.Dispose();
+                        
+                        if (metadataAreEqual)
+                        {
+                            IFileManager childFileSetNewMetadata = new FileManager(eventMsg.FileName, eventMsg.Context, needSaveToFile: true, needCreatePublicMarker: true);
+
+                            var success = childFileSetNewMetadata.CreateMetadataForChild(parentMetadata.Metadata.Guid, parentMetadata.Metadata.Marker, out newMetadataDTO);
+                            
+                            if (success)
+                            {
+                                _fileDataCache.Add(eventMsg.FileName, newMetadataDTO);
+                                eventMsg.ParentGuidDoc = parentMetadata.Metadata.Guid;
+                                break;
+                            }
+                            //Logger.Error($"##### SOMETHING WAS WRONG.");
+                            childFileSetNewMetadata.Dispose();
+                            // Если зависание останется, удалить.
+                            IFileManager childFileOpenForMetadataInit = new FileManager(eventMsg.FileName, eventMsg.Context, needSaveToFile: true, needCreatePublicMarker: true);
+
+                            var tempMetadataInit = childFileOpenForMetadataInit.Metadata;
+                            tempMetadataInit = null;
+                            childFileOpenForMetadataInit.Dispose();
+                        }
+                        return;
+                    }
+                    catch (Exception e)
+                    {
+	                    //Logger.Error($"{ex.Message}");
+                    }
+                    if (countOfTryies == 100) break;
+                    countOfTryies++;
+                    Thread.Sleep(1000);
+                }
+                // Если длина не одинакова и предпоследние символы у копируемого (N), а у исходного последние символы копия, то пропускаем отправку сообщения.
+                if (FilePathsAreCloning(Path.GetFileNameWithoutExtension(eventMsg.CloningFileName), Path.GetFileNameWithoutExtension(eventMsg.FileName)))
+                {
+                    return;
+                }
             }
-            exePath = executablePath;
-            return false;
+            //____________________________________
+            FileDataCacheElement fileCache = new FileDataCacheElement();
+            // если документ переименовали, (или перетащили?)то переименуем перед отправкой.
+            if (eventMsg.DocEvent.Equals(eEventType.DocRenamed) || eventMsg.DocEvent.Equals(eEventType.DocMoved))
+            {
+                if (_fileDataCache.Remove(fileCache.FileName))
+                {
+                //Logger.Trace(...);
+                }
+                eventMsg.FileName = eventMsg.CloningFileName;
+                _fileDataCache.Add(fileCache.FileName, fileCache.Metadata);
+            }
+
+            // Отправить сообщение
+            bool res = EventSender.TrySendEvent(_clientApiManager, eventMsg);
+            if (!res)
+            {
+                //Logger.Error(...);
+            }
+               //Logger.Trace(...);
         }
 ```
+
+Как видно для каждого события нужно сделать разные никак не связанные с отправкой на сервер действия. Удручает тот факт что события открытия файла локают сам файл, а он еще может быть не закрыт в другом главном потоке.
+Как вариант сделать класс обработчик, который будет реализовывать 1 метод(ad-hoc полиморфизм)  в зависимости от типа события. однако это пока не мой уровень и городить множество классов в рабочий проект на данном этапе - опасная затея.
+На данный момент буду лишь дробить в приватные методы, ведь метод подготовки к отправке сообщения имеет место быть в методе самого отправке сообщения, как метод резать хлеб в методе приготовить бутерброд.
+
+Получается что здесь применяется декомпозиция из за чрезмерности операций никак не стыкующихся со смыслом метода.
+# 2 Вызов метаданных документа с внешней логикой
+Есть класс ManagerOfFile благодаря которому мы можем узнать метаданные документа. В конструкторе мы указываем булевы, нужно ли нам создать метаданные или нет. Метадату можем получить только вызвав get свойство публичного поля метадата, это единственный способ, ибо только он указан в интерфейсе 
+```cs
+	/// <summary>
+    /// Управление файлом.
+    /// </summary>
+    public interface ManagerOfFile : IDisposable
+    {
+        /// <summary>
+        /// Текущие метаданные в памяти.
+        /// </summary>
+        MetadataDto Metadata { get; set; }
+    }
+```
+Get свойство вызывает ряд операций, сначала проверки, потом открытие, после попытку открыть метадату документа, тут и происходит путаница, ведь если быть невнимательным то можно забыть указать флаг _createmetdata_ отчего он станет false и мы попросту не сможем сгенерировать новую метадату для тех ситуаций когда нам действительно нужно. Как вариант выделить отдельным методом MetadataIsExist при методе Open, а дальше автоматически проставлять нужную нам информацию.
+
+Так же узнал что dispose при using вызывается не всегда, отчего файл открывается но не закрывается и из за этого происходит блок при следующих попытках открытия в разных потоках, и закрывать документ только при dispose может быть ошибкой.
+
+# 3 

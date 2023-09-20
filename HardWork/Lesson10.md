@@ -1,332 +1,444 @@
-﻿# 1 Слишком большой метод
+﻿___
+# 2.1. Класс слишком большой (нарушение SRP), или в программе создаётся слишком много его инстансов (подумайте, почему это плохой признак).
 
-При вызове метода отправки на сервер уведомления передавая в параметры путь к файлу, его родителя и тип события не учитывался тот факт, что в зависимости от типа событий мы должны произвести массу дополнительных действий. Обработчик может послать уведомление еще не создавшегося файла(событие копирования), или даже если он начал существовать, нужно изменить его метаданные(в частности создать новый идентификатор для дочернего файла, иначе может произойти путаница, изменен файл по  С/11/22//док.docx, а на сервере отобразится, что изменился файл С/11/док.docx).
-Посмотрим на примере
-## 1 до
-```cs
-/// <summary>
-        /// Отправить сообщение-событие "клиента".
-        /// </summary>
-        /// <param name="eventMsg">Сообщение-событие для отправки на web сервер клиента.</param>
-        /// @todo Переделать получение глобальные _guidMarker, _guidDoc, _usernameDoc для которых нет открытия
-        /// службой файла.
-        private void SendEventMessage(ClientEventMessage eventMsg)
-        {
-	        ///...
-            /// Инициализация, проверка на Null, получение СИД пользователя.
-            
-            //____________________________________
-            if (eventMsg.DocEvent == eEventType.CopyDocEvent)
-            {
-                if (String.IsNullOrEmpty(eventMsg.CloningFileName))
-                {
-                    return;
-                }
-                int countOfTryies = 0;
-                while (true)
-                {
-                    try
-                    {
-                        MetadataDto newMetadataDTO = null;
-                        var parentMetadata = _fileDataCache.TryGet(eventMsg.CloningFileName);
-                        if (parentMetadata == null)
-                        {
-                            countOfTryies++;
-                            Thread.Sleep(1000);
-                            continue;
-                        }
-                        bool metadataAreEqual;
-                        
-                        // Чтобы избежать ошибки что документ не был открыт, открываем документ.
-                        IFileManager firstFileGetMetadata = new FileManager(eventMsg.FileName, eventMsg.Context, needSaveToFile: true, needCreatePublicMarker: true);
+Класс DriverMessageHandler представляет собой обработчик сообщений от драйвера файловой системы и генерация для него ответа, в нем:
+24 поля
+20 методов
+2000 строк кода
 
-                        var tempMetadata = firstFileGetMetadata.Metadata;
-                        
-                        metadataAreEqual = tempMetadata.Id == parentMetadata.Metadata.Id;
-                        
-                        // проставить булеву, чтобы не вызывали CreateMetadataForChild.
-                        firstFileGetMetadata.Dispose();
-                        
-                        if (metadataAreEqual)
-                        {
-                            IFileManager childFileSetNewMetadata = new FileManager(eventMsg.FileName, eventMsg.Context, needSaveToFile: true, needCreatePublicMarker: true);
-
-                            var success = childFileSetNewMetadata.CreateMetadataForChild(parentMetadata.Metadata.Guid, parentMetadata.Metadata.Marker, out newMetadataDTO);
-                            
-                            if (success)
-                            {
-                                _fileDataCache.Add(eventMsg.FileName, newMetadataDTO);
-                                eventMsg.ParentGuidDoc = parentMetadata.Metadata.Guid;
-                                break;
-                            }
-                            //Logger.Error($"##### SOMETHING WAS WRONG.");
-                            childFileSetNewMetadata.Dispose();
-                            // Если зависание останется, удалить.
-                            IFileManager childFileOpenForMetadataInit = new FileManager(eventMsg.FileName, eventMsg.Context, needSaveToFile: true, needCreatePublicMarker: true);
-
-                            var tempMetadataInit = childFileOpenForMetadataInit.Metadata;
-                            tempMetadataInit = null;
-                            childFileOpenForMetadataInit.Dispose();
-                        }
-                        return;
-                    }
-                    catch (Exception e)
-                    {
-	                    //Logger.Error($"{ex.Message}");
-                    }
-                    if (countOfTryies == 100) break;
-                    countOfTryies++;
-                    Thread.Sleep(1000);
-                }
-                // Если длина не одинакова и предпоследние символы у копируемого (N), а у исходного последние символы копия, то пропускаем отправку сообщения.
-                if (FilePathsAreCloning(Path.GetFileNameWithoutExtension(eventMsg.CloningFileName), Path.GetFileNameWithoutExtension(eventMsg.FileName)))
-                {
-                    return;
-                }
-            }
-            //____________________________________
-            FileDataCacheElement fileCache = new FileDataCacheElement();
-            // если документ переименовали, (или перетащили?)то переименуем перед отправкой.
-            if (eventMsg.DocEvent.Equals(eEventType.DocRenamed) || eventMsg.DocEvent.Equals(eEventType.DocMoved))
-            {
-                if (_fileDataCache.Remove(fileCache.FileName))
-                {
-                //Logger.Trace(...);
-                }
-                eventMsg.FileName = eventMsg.CloningFileName;
-                _fileDataCache.Add(fileCache.FileName, fileCache.Metadata);
-            }
-
-            // Отправить сообщение
-            bool res = EventSender.TrySendEvent(_clientApiManager, eventMsg);
-            if (!res)
-            {
-                //Logger.Error(...);
-            }
-               //Logger.Trace(...);
-        }
+Сначала происходит фильтрация сообщения по пайплайну
 ```
+// Пропустить обработку сообщения, если процесс, который обращается к файлу из списка необрабатываемых.
+...
+// Пропустить обработку сообщения, если файл шаблонный.
+...
+// Пропустить обработку сообщения, если файл из пути для шаблонов.
+...
+// Пропустить обработку сообщения, если файл является исполняемым.
+...
+// Пропустить обработку документов неподдерживаемых форматов.
+...
+// Заблокировать доступ процессу, не предназначенному для обработки документов поддерживаемых форматов.
+...
 
-Как видно для каждого события нужно сделать разные никак не связанные с отправкой на сервер действия. Удручает тот факт что события открытия файла локают сам файл, а он еще может быть не закрыт в другом главном потоке.
-Как вариант сделать класс обработчик, который будет реализовывать 1 метод(ad-hoc полиморфизм)  в зависимости от типа события. однако это пока не мой уровень и городить множество классов в рабочий проект на данном этапе - опасная затея.
-На данный момент буду лишь дробить в приватные методы, ведь метод подготовки к отправке сообщения имеет место быть в методе самого отправке сообщения, как метод резать хлеб в методе приготовить бутерброд.
+```
+После успешной фильтрации нам нужно обработать сообщение в зависимости от PID процесса(логика для explorer полностью отличается от WINWORD.EXE). Все это так же вызывается в нашем пайплайне
 
-Получается что здесь применяется декомпозиция из за чрезмерности операций никак не стыкующихся со смыслом метода.
-# 2 Вызов метаданных документа с внешней логикой
-Есть класс ManagerOfFile благодаря которому мы можем узнать метаданные документа. В конструкторе мы указываем булевы, нужно ли нам создать метаданные или нет. Метадату можем получить только вызвав get свойство публичного поля метадата, это единственный способ, ибо только он указан в интерфейсе 
+Внутри обработки отправляется в потокобезопасную очередь отправки сообщений. Сама очередь и логика отправки находится так же в DriverMessageHandler.
+
+Я уже задумывался над этой проблемой, ибо для того чтобы отправить одно из событий(В тот момент оно ловилось тогда когда PID нашего процесса закрывался), приходилось пробрасывать DriverMessageHandler в конструктор класса ProcessMonitor, который в отдельном потоке подписывается на событие удаления с помощью системного класса ManagementEventWatcher. Получается так что пробрасываем целый класс только для того чтобы отправить событие на сервер, и сделано это было в рамках исследования, но нет ничего постояннее чем временное...
+
+Решение в очевидной декомпозиции. Если класс обрабатывает ответ то он только это и должен делать. Логика получения событий в потокобезопасную очередь, чтение и отправка должна быть написана отдельным классом EventSender.
+
+___
+
+# 2.2
+Код был создан для получения имени процесса и его родительского PID
+Код до
 ```cs
 	/// <summary>
-    /// Управление файлом.
+    /// Имя процесса.
     /// </summary>
-    public interface ManagerOfFile : IDisposable
+    public class ProcessName
     {
         /// <summary>
-        /// Текущие метаданные в памяти.
+        /// Получить имя процесса.
         /// </summary>
-        MetadataDto Metadata { get; set; }
+        /// <param name="longPid">ID процесса.</param>
+        /// <returns>Имя или Empty, если ошибка.</returns>
+        public static string GetName(long longPid)
+        {
+            if (longPid == -1) return String.Empty;
+            System.Diagnostics.Process proc = null;
+            int pid = 0;
+            try
+            {
+                pid = Convert.ToInt32(longPid);
+                proc = System.Diagnostics.Process.GetProcessById(pid);
+                return proc.ProcessName;
+            }
+            catch (Exception e)
+            {
+                //Logger.Error($"Error get process with Pid: {longPid}. Error: {e}");
+                return String.Empty;
+            }
+        }
+        /// <summary>
+        /// Получить PID родительского процесса.
+        /// </summary>
+        /// <param name="longPid">ID процесса.</param>
+        /// <returns>Имя или null, если ошибка.</returns>
+        public static int GetParentPID(long longPid)
+        {
+            System.Diagnostics.Process childProc = null;
+            int childPid = 0;
+            try
+            {
+                childPid = Convert.ToInt32(longPid);
+                childProc = System.Diagnostics.Process.GetProcessById(childPid);
+                System.Diagnostics.Process parProc = ParentProcessUtilities.GetParentProcess(Int32.Parse(childPid.ToString()));
+                //Logger.Trace($"#### Child Pid: {childPid}. Child name: {childProc.ProcessName}");
+                if (parProc is null)
+                {
+                    return -1;
+                }
+                //Logger.Trace($"Parent name: {parProc.ProcessName}");
+                return parProc.Id;
+            }
+            catch (Exception e)
+            {
+                //Logger.Error($"Error get process with Pid: {longPid}. Error: {e}");
+                return -1;
+            }
+        }
     }
 ```
-Get свойство вызывает ряд операций, сначала проверки, потом открытие, после попытку открыть метадату документа, тут и происходит путаница, ведь если быть невнимательным то можно забыть указать флаг _createmetdata_ отчего он станет false и мы попросту не сможем сгенерировать новую метадату для тех ситуаций когда нам действительно нужно. Как вариант выделить отдельным методом MetadataIsExist при методе Open, а дальше автоматически проставлять нужную нам информацию.
 
-Так же узнал что dispose при using вызывается не всегда, отчего файл открывается но не закрывается и из за этого происходит блок при следующих попытках открытия в разных потоках, и закрывать документ только при dispose может быть ошибкой.
+Данная логика была перенесена в класс ProcessNameManager, потому что семантика схожа.
 
-# 3 Генерация маршрута
-Вызвав метод Create в контроллере VehicleRouteController происходят кучу операций именно внутри метода, заставляя его быть громоздким
-# 3 до
+# 2.3
+
+В классе по отправке событий для клонируемых файлов был метод сравнивающий имена родительского и итогового файла, потому что родительское имя могло измениться при копировании множества документов(глобальные переменные - зло).
 ```cs
-[HttpPost]
-        [ValidateAntiForgeryToken]
-        public async Task<IActionResult> Create([Bind("VehicleId")] Route route, int Count)
+		/// <summary>
+        /// Является ли родительский документ первичным клонируемым для дочернего, например:
+        /// Док - копия и Док - копия(N)
+        /// </summary>
+        /// <param name="parentFilePath"></param>
+        /// <param name="childFilePath"></param>
+        /// <returns></returns>
+        private bool FilePathsAreCloning(string parentFilePath, string childFilePath)
         {
-            int countOfCreatedRoutes = 0;
-            var vehicleId = route.VehicleId;
-            var routeByVehicle = _context.Route.FirstOrDefault(r => r.VehicleId == vehicleId);
-            if (routeByVehicle == null)
+            try
             {
-                var now = DateTime.Now;
-                var firstRoute = new Route()
+                if (String.IsNullOrEmpty(parentFilePath))
                 {
-                    VehicleId = route.VehicleId,
-                    StartDate = now,
-                    IsFinished = false,
-                    KilometresTraveled = 0
-                };
-                _context.Route.Add(firstRoute);
-                _context.SaveChanges();
-
-                var startGeopoint = new Geopoint()
-                {
-                    VehicleId = route.VehicleId,
-                    RouteId = firstRoute.Id,
-                    point = new NetTopologySuite.Geometries.Point(new NetTopologySuite.Geometries.Coordinate(49.9106 , 8.9484)) { SRID = 4326 },
-                    LocationDate = now,
-
-                };
-                var endGeopoint = new Geopoint()
-                {
-                    VehicleId = route.VehicleId,
-                    RouteId = firstRoute.Id,
-                    point = new NetTopologySuite.Geometries.Point(new NetTopologySuite.Geometries.Coordinate(49.5751 , 8.0942)) { SRID = 4326 },
-                    LocationDate = now.AddHours(1),
-
-                };
-
-                _context.Geopoint.Add(startGeopoint);
-                _context.Geopoint.Add(endGeopoint);
-                _context.SaveChanges();
-
-                firstRoute.LocationStart = startGeopoint.Id;
-                firstRoute.LocationEnd = endGeopoint.Id;
-                firstRoute.EndDate = endGeopoint.LocationDate;
-
-                _context.Route.Update(firstRoute);
-                _context.SaveChanges();
-
-                countOfCreatedRoutes++;
-            }
-
-
-            for (;countOfCreatedRoutes < Count; countOfCreatedRoutes++)
-            {
-                int KilometresTraveled = 0;
-                // получаем последний трек
-                var lastRoute = _context.Route.Where(r => r.VehicleId == route.VehicleId).OrderBy(x => x.Id).Last();
-                // получаем от него конечную дату и конечный геопоинт   
-                var endDateOfLastRoute = lastRoute.EndDate.Value.AddHours(18);
-                var endLocationOfLastRoute = _context.Geopoint.FirstOrDefault(g => g.Id == lastRoute.LocationEnd);
-
-                //1. Создать рут и получить его айдишник.
-                var newRoute = new Route()
-                {
-                    VehicleId = route.VehicleId,
-                    StartDate = endDateOfLastRoute.AddHours(1),
-                    IsFinished = false,
-                    KilometresTraveled = 0
-                };
-                _context.Route.Add(newRoute);
-                _context.SaveChanges();
-
-                // Создать стартовую геопоинт, добавить в бд, присвоить ньюруту стартовый айди.
-                // генерим 10 геопоинтов
-                var firstGeopoint = _openRouteServiceApiClient.CreateRandomCoordinateFromStartXY(endLocationOfLastRoute.point.X,
-                    endLocationOfLastRoute.point.Y,
-                    MaxDistance);
-                KilometresTraveled += firstGeopoint.Item3;
-                var geopoint = new Geopoint()
-                {
-                    VehicleId = route.VehicleId,
-                    RouteId = newRoute.Id,
-                    point = new NetTopologySuite.Geometries.Point(new NetTopologySuite.Geometries.Coordinate(firstGeopoint.Item1, firstGeopoint.Item2)) { SRID = 4326 },
-                    LocationDate = endDateOfLastRoute.AddHours(1),
-
-                };
-                _context.Geopoint.Add(geopoint);
-                _context.SaveChanges();
-
-                newRoute.LocationStart = geopoint.Id;
-                newRoute.StartDate = geopoint.LocationDate;
-
-                double bufferX = geopoint.point.X;
-                double bufferY = geopoint.point.Y;
-                var bufferDate = geopoint.LocationDate;
-                for (int i = 0; i < 10; i++)
-                {
-                    firstGeopoint = _openRouteServiceApiClient.CreateRandomCoordinateFromStartXY(
-                        bufferX,
-                        bufferY,
-                        MaxDistance);
-                    KilometresTraveled += firstGeopoint.Item3;
-                    geopoint = new Geopoint()
-                    {
-                        VehicleId = route.VehicleId,
-                        RouteId = newRoute.Id,
-                        point = new NetTopologySuite.Geometries.Point(new NetTopologySuite.Geometries.Coordinate(firstGeopoint.Item1, firstGeopoint.Item2)) { SRID = 4326 },
-                        LocationDate = bufferDate.AddHours(1)
-                    };
-
-                    _context.Geopoint.Add(geopoint);
-                    _context.SaveChanges();
-
-                    bufferX = geopoint.point.X;
-                    bufferY = geopoint.point.Y;
+                    //Logger.Error($"String.IsNullOrEmpty(parentFilePath).");
+                    return false;
                 }
-                firstGeopoint = _openRouteServiceApiClient.CreateRandomCoordinateFromStartXY(
-                         bufferX,
-                         bufferY,
-                         MaxDistance);
-                KilometresTraveled += firstGeopoint.Item3;
-                geopoint = new Geopoint()
+                if (String.IsNullOrEmpty(childFilePath))
                 {
-                    VehicleId = route.VehicleId,
-                    RouteId = newRoute.Id,
-                    point = new NetTopologySuite.Geometries.Point(new NetTopologySuite.Geometries.Coordinate(firstGeopoint.Item1, firstGeopoint.Item2)) { SRID = 4326 },
-                    LocationDate = bufferDate.AddHours(1)
-                };
-                _context.Geopoint.Add(geopoint);
-                _context.SaveChanges();
-                // конечная дата равна дате последнего получившегося геопоинта
-                newRoute.EndDate = geopoint.LocationDate;
-                // isfinished = true;
-                newRoute.IsFinished = true;
-                newRoute.KilometresTraveled = KilometresTraveled;
-                newRoute.LocationEnd = geopoint.Id;
-
-                _context.Route.Update(newRoute);
-                _context.SaveChanges();
-            }
-            return View();
-        }
-```
-Декомпозируем и разобьем его, делая более читаемым
-# 3 после
-
-```cs
-// POST: VehicleRoute/Create
-        // To protect from overposting attacks, enable the specific properties you want to bind to.
-        // For more details, see http://go.microsoft.com/fwlink/?LinkId=317598.
-        [HttpPost]
-        [ValidateAntiForgeryToken]
-        public async Task<IActionResult> Create([Bind("VehicleId")] Route route, int Count)
-        {
-            int countOfCreatedRoutes = 0;
-            var vehicleId = route.VehicleId;
-            var routeByVehicle = _context.Route.FirstOrDefault(r => r.VehicleId == vehicleId);
-            if (routeByVehicle == null)
-            {
-                countOfCreatedRoutes = InitializeNewRoute(route, countOfCreatedRoutes);
-            }
-
-            countOfCreatedRoutes = GenerateNewRoutes(route, Count, countOfCreatedRoutes);
-            return View();
-        }
-```
-
-Метод стал удобочитаемым и более понятным, если произойдет баг во время генерации маршрута, то мы быстрее сможем соориентироваться, где именно он может находиться.
-# 4 Сигнал драйверу
-давно висела эта строчка
-```cs
-// Посылаем сигнал драйверу, если драйвер(агент) откажет в открытии, то
-                    // Выскочет исключение access
-                    using (var _ = new StreamReader(filePath)) { }
-```
-Создавая Streamreader к файлу, мы генерируем сигнал который будет обрабатываться в программе по обработки сигналов, явное отличие от остальных сигналов было имя процесса которое мы получаем через его PID.
-Решением было создания пайпы подключающейся непосредственно к существующему процессу  
-```cs
-// Создаем серверный пайп
-                    using (NamedPipeServerStream pipeServer = new NamedPipeServerStream("myPipe"))
+                    //Logger.Error($"String.IsNullOrEmpty(childFilePath).");
+                    return false;
+                }
+                //Logger.Trace($"Checking childFileCopyWord:{childFilePath}: parentFileCopyWord{parentFilePath} are same.");
+                // как минимум у родителя —_копия а у дочернего файла —_копия (N)
+                if (parentFilePath.Length < 7 || childFilePath.Length < 11)
+                {
+                    //Logger.Error($" parentFilePath.Length < 7 || childFilePath.Length < 11.");
+                    return false;
+                }
+                // но может быть что у дочернего —_копия (NNN...)
+                int countOfDigitsInParenthesis = 0;
+                var stackOfReversedDigits = new Stack<Char>();
+                if (childFilePath[childFilePath.Length - 1] != ')')
+                {
+                    //Logger.Error($"childFilePath[childFilePath.Length - 1] != ')'.");
+                    return false;
+                }
+                for (int childFilePathLetter = childFilePath.Length - 2; childFilePathLetter > 0; childFilePathLetter--)
+                {
+                    if (childFilePath[childFilePathLetter] == '(')
                     {
-                        Console.WriteLine("Ожидание подключения клиента...");
-
-                        // Ожидаем подключения клиента
-                        pipeServer.WaitForConnection();
-
-                        Console.WriteLine("Клиент подключен.");
-                        // ...
+                        break;
                     }
+                    if (Char.IsDigit(childFilePath[childFilePathLetter]))
+                    {
+                        countOfDigitsInParenthesis++;
+                        stackOfReversedDigits.Push(childFilePath[childFilePathLetter]);
+                        continue;
+                    }
+                    // не может такого быть —_копия && —_копия (123a4)
+                    {
+                        //Logger.Error($"childFilePath[childFilePathLetter] == {childFilePath[childFilePathLetter]}");
+                        return false;
+                    }
+                }
+                // не может такого быть —_копия && —_копия ()
+                if (countOfDigitsInParenthesis == 0)
+                {
+                    //Logger.Error($"countOfDigitsInParenthesis == 0");
+                    return false;
+                }
+                // Вытаскиваем из стека в билдер получая правильный порядок цифр
+                var bufferOfDigits = new StringBuilder();
+                while (stackOfReversedDigits.Count > 0)
+                {
+                    bufferOfDigits.Append(stackOfReversedDigits.Pop());
+                }
+                string digitsInParenthesis = bufferOfDigits.ToString();
+                bufferOfDigits = null;
+                if (!Int32.TryParse(digitsInParenthesis, out _))
+                {
+                    // не может такого быть —_копия (2147483647)
+                    return false;
+                }
+                // если не хватает NumberBuffer.Length символов _(NNN...) до равенства копий
+                var LengthOfCopyingFilesAreEqual = parentFilePath.Length + countOfDigitsInParenthesis + 3 == childFilePath.Length;
+                if (!LengthOfCopyingFilesAreEqual)
+                {
+                    //Logger.Error($"LengthOfCopyingFilesAre NOT Equal");
+                    return false;
+                }
+                if (childFilePath[childFilePath.Length - 2 - countOfDigitsInParenthesis] != '(')
+                {
+                   //Logger.Error($"childFilePath[childFilePath.Length - 2 - countOfDigitsInParenthesis] != '('");
+                    return false;
+                }
+                if (childFilePath[childFilePath.Length - 3 - countOfDigitsInParenthesis] != ' ')
+                {
+                    //Logger.Error($"childFilePath[childFilePath.Length - 3 - countOfDigitsInParenthesis] != ' '");
+                    return false;
+                }
+                var childFileCopyWord = childFilePath.Substring(childFilePath.Length - 10 - countOfDigitsInParenthesis, 7);
+                var parentFileCopyWord = parentFilePath.Substring(parentFilePath.Length - 7, 7);
+                //Logger.Trace($"childFileCopyWord:{childFileCopyWord}: parentFileCopyWord{parentFileCopyWord} are same.");
+                return String.Equals(childFileCopyWord, parentFileCopyWord);
+            }
+            catch (Exception ex)
+            {
+                //Logger.Error($"{ex}");
+                return false;
+            }
+        }
 ```
-иногда решения не очевидны :)
+Данный метод был перенесен в статический класс FilePathManager, который будет отвечать за пути для файлов и их сравнение, являются ли в одном диске, в одной папке, одинаково ли названы итд...
 
-Пытался найти другие примеры но не смог, и непонятно толи плохо искал, толи я стал лучше писать код и потому уже вижу на какие действия можно разделить сразу же.
-На всякий случай постараюсь закрепить что 
-физическая строка(т.е операция) кода не соответствует принципу SRP тогда, когда она делает помимо своих обязательств, чтото еще.
-Мы не можем во время операции нарезать хлеб, взяв нож побольше и поставив рядом с овощами нарезать и их. Вместо двух и более атомарных действий должна быть только одна, и она прямо связана с той семантикой, в том контексте где она обитает. Операция должна затрагивать только свою логику но никак не чужую(привет глобальные переменные).
+# 2.4
+Для избегания постоянного открытия документа и чтение его метаданных использовалась переменная в DriverMessageHandler именуемая MetadataCache, которая очищается с определенным интервалом из настроек конфигураций(отчего сыграло с нами злую шутку, был момент когда во время печати сгорал кеш метаданных(время хранения иссякало)). Потому было два варианта решения задачи, правильная в виде создания отдельного потокобезопасного класса в виде списка элементов в которых хранится сама метадата, путь к файлу и булева IsOpen(нельзя удалять элемент с метадатой хотябы в тот момент когда он открыт в приложении). Неправильная же состояла в том чтобы просто увеличить в конфигурации время жизни кеша. Угадайте какой мы выбрали в рамках "главное быстро сделать и показать"? :)
+
+# 2.5
+Несоблюдение принципа инверсии зависимостей и внедрения зависимостей.
+Банальный пример с испольнованием логера
+код до
+```cs
+public class ProductService
+{
+    private Logger logger = new Logger();
+
+    public void SaveProduct(Product product)
+    {
+        // Логика сохранения продукта
+        logger.Trace("Продукт сохранен");
+    }
+}
+```
+
+код после
+```cs
+public interface ILogger
+{
+    void Trace(string message);
+}
+
+public class FileLogger : ILogger
+{
+    public void Trace(string message)
+    {
+        // 
+    }
+}
+
+public class FileManager
+{
+    private ILogger logger;
+
+    public FileManager(ILogger logger)
+    {
+        this.logger = logger;
+    }
+
+    public void SaveFile(Product product)
+    {
+	    //...
+        //Logger.Trace("Файл сохранен");
+        //...
+    }
+}
+```
+
+Таким образом мы смогли ослабить зависимости. Теперь мы можем поменять конкретную реализацию ILogger не меняя ничего как в FileManager, так и в остальных классах.
+# 2.6
+На старой работе при отправке задачи на согласование по регламенту, подписывающим являлся род класс Recipient, он высчитывался от дочерних Employee(Employee-User-Recipient) - сотрудник или User(User-Recipient) - пользователь(контрагент). И в схеме был блок для подписания, и именно там было приведение типа подписывающего и в зависимости от типа выполнялись разные действия. Как вариант не приводить к Recipient, унаследовать род класс интерфейс IRecipient. Указать в конструкторе класса задачи не класс исполнителя, а именно интерфейс. Таким образом Задача стартует, в блоке подписывания явно сделать варианты для сотрудника и контрагента.
+# 2.7
+В рабочих проектах не встречалось, постараюсь развить мысль на любимом DwarfFortress.
+Руководство решило выпустить новое масштабное обновление чтобы порадовать своих игроков новым сеттингом, а именно зомби.
+У нас есть много классов в виде дворфов, собак, кошек...каштанового дерева.
+Самый плохой вариант это наследоваться от классов выше и переписывать/расширять логику (DwarfZombie,DogZombie...), да и как так тогда реализовать логику заражения? Удалять объект дворфа и генерировать на основе его полей нового? Переносить всю историю его любви к табуреткам будет проблематично.
+Как вариант вижу использование паттерна Декоратор. Создаем класс ZombieDecorator 
+```cs
+public abstract class CharacterDecorator : Character
+{
+    protected Character character;
+
+    public CharacterDecorator(Character character)
+    {
+        this.character = character;
+    }
+}
+public class ZombieDecorator : CharacterDecorator
+{
+    public ZombieDecorator(Character character) : base(character) { }
+
+    public override string Say()
+    {
+        return character.Say() + "О кстати у тебя есть лишние мозги? Друг спрашивает...";
+    }
+}
+```
+
+Уверен ответ не очень оптимальный но как ни крутил, не смог придумать ничего более. Ведь если происходит ситуация когда нужно создать наследника, а по итогу и у остальных приходится это делать, то что это может означать? Когда ситуация А->А1 B->B1 C->C1 то не лучше ли будет рассмотреть 1 как явление отдельным классом или набором методов?  
+# 2.8
+Наследники должны расширять но не переопределять методы родительского класса, иначе наследование будет не истинным. Решается паттерном посетитель.
+Код до
+```cs
+class Animal
+{
+    public virtual void MakeSound()
+    {
+        Console.WriteLine("Animal makes a sound.");
+    }
+}
+
+class Dog : Animal
+{
+    public override void MakeSound()
+    {
+        Console.WriteLine("Bark.");
+    }
+}
+class Cat : Animal
+{
+    public override void MakeSound()
+    {
+        Console.WriteLine("Meow.");
+    }
+}
+```
+Код после
+```cs
+class Animal
+{
+    public virtual void Accept(AnimalVisitor visitor)
+    {
+        visitor.Visit(this);
+    }
+}
+
+class Dog : Animal
+{
+    public override void Accept(AnimalVisitor visitor)
+    {
+        visitor.Visit(this);
+    }
+}
+
+class Cat : Animal
+{
+    public override void Accept(AnimalVisitor visitor)
+    {
+        visitor.Visit(this);
+    }
+}
+
+interface AnimalVisitor
+{
+    void Visit(Animal animal);
+    void Visit(Dog dog);
+    void Visit(Cat cat);
+}
+
+class SoundAnimalVisitor : AnimalVisitor
+{
+    public void Visit(Animal animal)
+    {
+        Console.WriteLine("Animal makes a sound.");
+    }
+
+    public void Visit(Dog dog)
+    {
+        Console.WriteLine("Bark.");
+    }
+
+    public void Visit(Cat cat)
+    {
+        Console.WriteLine("Meow.");
+    }
+}
+```
+Однако если посмотреть в рамках задания 3.2 то это будет считаться антипаттерном, ведь животинка издает звук? Да но по своему, сложность этого действия минимальна. Легче не думать и сделать за 5 минут чем подумать 5 минут и сделать, разница лишь в том что думать сможешь меньше на более важные вещи. Сам смысл паттерна скорее в применении более серьезной и разносторонней логики под одинаковым действием. 
+# 3.1
+Раньше метод по отправке сообщений принимал ряд параметров для файла.
+Возникала путаница когда функционал дорос до того чтобы отправлять уведомление на сервер с гуидом родителя, приходилось во многих местах явно создавать новые переменные которых недоставало для метода отправки события файла.
+Решением же стало выделение в отдельный EventFile класс, добавление полей и их последующее заполнение находится теперь только в конструкторе, ибо все нужные нам значения находятся в классе метадаты документа.
+Даже если параметров много и все они разного типа, то нужно подняться на уровень меты выше, ибо они могут описывать 1 сущность с которой работать гораздо удобнее.
+
+# 3.2 
+Допустим мы реализовываем клон To-do, а следовательно создаем систему по управлению списком задач. Используем паттерн Команда
+```cs
+public class Task
+{
+    public string Title { get; set; }
+    public string Description { get; set; }
+    public bool IsCompleted { get; set; }
+}
+public class CreateTaskCommand
+{
+    private TaskList _taskList;
+
+    public CreateTaskCommand(TaskList taskList)
+    {
+        _taskList = taskList;
+    }
+
+    public void Execute(string title, string description)
+    {
+        _taskList.AddTask(new Task { Title = title, Description = description });
+    }
+}
+
+public class ChangeTaskStatusCommand
+{
+    private TaskList _taskList;
+
+    public ChangeTaskStatusCommand(TaskList taskList)
+    {
+        _taskList = taskList;
+    }
+
+    public void Execute(Task task, bool isCompleted)
+    {
+        _taskList.UpdateTaskStatus(task, isCompleted);
+    }
+}
+```
+Но какой смысл если можно написать и без паттерна
+```cs
+public class Task
+{
+    public string Title { get; set; }
+    public string Description { get; set; }
+    public bool IsCompleted { get; set; }
+}
+
+public class TaskList
+{
+    private List<Task> _tasks = new List<Task>();
+
+    public void AddTask(Task task)
+    {
+        _tasks.Add(task);
+    }
+
+    public void UpdateTaskStatus(Task task, bool isCompleted)
+    {
+        task.IsCompleted = isCompleted;
+    }
+
+    public void RemoveTask(Task task)
+    {
+        _tasks.Remove(task);
+    }
+}
+```
+Данный пример говорит не о SOLID как в предыдущих заданиях, а KISS

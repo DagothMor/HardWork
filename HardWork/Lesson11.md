@@ -1,444 +1,205 @@
-﻿___
-# 2.1. Класс слишком большой (нарушение SRP), или в программе создаётся слишком много его инстансов (подумайте, почему это плохой признак).
-
-Класс DriverMessageHandler представляет собой обработчик сообщений от драйвера файловой системы и генерация для него ответа, в нем:
-24 поля
-20 методов
-2000 строк кода
-
-Сначала происходит фильтрация сообщения по пайплайну
-```
-// Пропустить обработку сообщения, если процесс, который обращается к файлу из списка необрабатываемых.
-...
-// Пропустить обработку сообщения, если файл шаблонный.
-...
-// Пропустить обработку сообщения, если файл из пути для шаблонов.
-...
-// Пропустить обработку сообщения, если файл является исполняемым.
-...
-// Пропустить обработку документов неподдерживаемых форматов.
-...
-// Заблокировать доступ процессу, не предназначенному для обработки документов поддерживаемых форматов.
-...
-
-```
-После успешной фильтрации нам нужно обработать сообщение в зависимости от PID процесса(логика для explorer полностью отличается от WINWORD.EXE). Все это так же вызывается в нашем пайплайне
-
-Внутри обработки отправляется в потокобезопасную очередь отправки сообщений. Сама очередь и логика отправки находится так же в DriverMessageHandler.
-
-Я уже задумывался над этой проблемой, ибо для того чтобы отправить одно из событий(В тот момент оно ловилось тогда когда PID нашего процесса закрывался), приходилось пробрасывать DriverMessageHandler в конструктор класса ProcessMonitor, который в отдельном потоке подписывается на событие удаления с помощью системного класса ManagementEventWatcher. Получается так что пробрасываем целый класс только для того чтобы отправить событие на сервер, и сделано это было в рамках исследования, но нет ничего постояннее чем временное...
-
-Решение в очевидной декомпозиции. Если класс обрабатывает ответ то он только это и должен делать. Логика получения событий в потокобезопасную очередь, чтение и отправка должна быть написана отдельным классом EventSender.
-
-___
-
-# 2.2
-Код был создан для получения имени процесса и его родительского PID
-Код до
+﻿
+# 1.1 
+Вернемся к ManagerOfFile.
+Напомню что данный класс должен читать метадату документа и менять/создавать ее.
+Посмотрим на интерфейс
 ```cs
 	/// <summary>
-    /// Имя процесса.
+    /// Управление файлом.
     /// </summary>
-    public class ProcessName
+    public interface IManagerOfFile : IDisposable
     {
         /// <summary>
-        /// Получить имя процесса.
+        /// Текущие метаданные в памяти.
         /// </summary>
-        /// <param name="longPid">ID процесса.</param>
-        /// <returns>Имя или Empty, если ошибка.</returns>
-        public static string GetName(long longPid)
-        {
-            if (longPid == -1) return String.Empty;
-            System.Diagnostics.Process proc = null;
-            int pid = 0;
-            try
-            {
-                pid = Convert.ToInt32(longPid);
-                proc = System.Diagnostics.Process.GetProcessById(pid);
-                return proc.ProcessName;
-            }
-            catch (Exception e)
-            {
-                //Logger.Error($"Error get process with Pid: {longPid}. Error: {e}");
-                return String.Empty;
-            }
-        }
+        MetadataDto Metadata { get; set; }
+
+        bool SetReadOnly(List<MarkerDto> availableMarks);
+
         /// <summary>
-        /// Получить PID родительского процесса.
+        /// Изменить метадату шаблона для будущего нового документа.
         /// </summary>
-        /// <param name="longPid">ID процесса.</param>
-        /// <returns>Имя или null, если ошибка.</returns>
-        public static int GetParentPID(long longPid)
-        {
-            System.Diagnostics.Process childProc = null;
-            int childPid = 0;
-            try
-            {
-                childPid = Convert.ToInt32(longPid);
-                childProc = System.Diagnostics.Process.GetProcessById(childPid);
-                System.Diagnostics.Process parProc = ParentProcessUtilities.GetParentProcess(Int32.Parse(childPid.ToString()));
-                //Logger.Trace($"#### Child Pid: {childPid}. Child name: {childProc.ProcessName}");
-                if (parProc is null)
-                {
-                    return -1;
-                }
-                //Logger.Trace($"Parent name: {parProc.ProcessName}");
-                return parProc.Id;
-            }
-            catch (Exception e)
-            {
-                //Logger.Error($"Error get process with Pid: {longPid}. Error: {e}");
-                return -1;
-            }
-        }
-    }
-```
+        /// <returns>Успех</returns>
+        bool ResetMetadataForTemplateDocument();
 
-Данная логика была перенесена в класс ProcessNameManager, потому что семантика схожа.
 
-# 2.3
-
-В классе по отправке событий для клонируемых файлов был метод сравнивающий имена родительского и итогового файла, потому что родительское имя могло измениться при копировании множества документов(глобальные переменные - зло).
-```cs
-		/// <summary>
-        /// Является ли родительский документ первичным клонируемым для дочернего, например:
-        /// Док - копия и Док - копия(N)
+        /// <summary>
+        /// Делает текущий гуид родительским и генерирует новый.
         /// </summary>
-        /// <param name="parentFilePath"></param>
-        /// <param name="childFilePath"></param>
-        /// <returns></returns>
-        private bool FilePathsAreCloning(string parentFilePath, string childFilePath)
-        {
-            try
-            {
-                if (String.IsNullOrEmpty(parentFilePath))
-                {
-                    //Logger.Error($"String.IsNullOrEmpty(parentFilePath).");
-                    return false;
-                }
-                if (String.IsNullOrEmpty(childFilePath))
-                {
-                    //Logger.Error($"String.IsNullOrEmpty(childFilePath).");
-                    return false;
-                }
-                //Logger.Trace($"Checking childFileCopyWord:{childFilePath}: parentFileCopyWord{parentFilePath} are same.");
-                // как минимум у родителя —_копия а у дочернего файла —_копия (N)
-                if (parentFilePath.Length < 7 || childFilePath.Length < 11)
-                {
-                    //Logger.Error($" parentFilePath.Length < 7 || childFilePath.Length < 11.");
-                    return false;
-                }
-                // но может быть что у дочернего —_копия (NNN...)
-                int countOfDigitsInParenthesis = 0;
-                var stackOfReversedDigits = new Stack<Char>();
-                if (childFilePath[childFilePath.Length - 1] != ')')
-                {
-                    //Logger.Error($"childFilePath[childFilePath.Length - 1] != ')'.");
-                    return false;
-                }
-                for (int childFilePathLetter = childFilePath.Length - 2; childFilePathLetter > 0; childFilePathLetter--)
-                {
-                    if (childFilePath[childFilePathLetter] == '(')
-                    {
-                        break;
-                    }
-                    if (Char.IsDigit(childFilePath[childFilePathLetter]))
-                    {
-                        countOfDigitsInParenthesis++;
-                        stackOfReversedDigits.Push(childFilePath[childFilePathLetter]);
-                        continue;
-                    }
-                    // не может такого быть —_копия && —_копия (123a4)
-                    {
-                        //Logger.Error($"childFilePath[childFilePathLetter] == {childFilePath[childFilePathLetter]}");
-                        return false;
-                    }
-                }
-                // не может такого быть —_копия && —_копия ()
-                if (countOfDigitsInParenthesis == 0)
-                {
-                    //Logger.Error($"countOfDigitsInParenthesis == 0");
-                    return false;
-                }
-                // Вытаскиваем из стека в билдер получая правильный порядок цифр
-                var bufferOfDigits = new StringBuilder();
-                while (stackOfReversedDigits.Count > 0)
-                {
-                    bufferOfDigits.Append(stackOfReversedDigits.Pop());
-                }
-                string digitsInParenthesis = bufferOfDigits.ToString();
-                bufferOfDigits = null;
-                if (!Int32.TryParse(digitsInParenthesis, out _))
-                {
-                    // не может такого быть —_копия (2147483647)
-                    return false;
-                }
-                // если не хватает NumberBuffer.Length символов _(NNN...) до равенства копий
-                var LengthOfCopyingFilesAreEqual = parentFilePath.Length + countOfDigitsInParenthesis + 3 == childFilePath.Length;
-                if (!LengthOfCopyingFilesAreEqual)
-                {
-                    //Logger.Error($"LengthOfCopyingFilesAre NOT Equal");
-                    return false;
-                }
-                if (childFilePath[childFilePath.Length - 2 - countOfDigitsInParenthesis] != '(')
-                {
-                   //Logger.Error($"childFilePath[childFilePath.Length - 2 - countOfDigitsInParenthesis] != '('");
-                    return false;
-                }
-                if (childFilePath[childFilePath.Length - 3 - countOfDigitsInParenthesis] != ' ')
-                {
-                    //Logger.Error($"childFilePath[childFilePath.Length - 3 - countOfDigitsInParenthesis] != ' '");
-                    return false;
-                }
-                var childFileCopyWord = childFilePath.Substring(childFilePath.Length - 10 - countOfDigitsInParenthesis, 7);
-                var parentFileCopyWord = parentFilePath.Substring(parentFilePath.Length - 7, 7);
-                //Logger.Trace($"childFileCopyWord:{childFileCopyWord}: parentFileCopyWord{parentFileCopyWord} are same.");
-                return String.Equals(childFileCopyWord, parentFileCopyWord);
-            }
-            catch (Exception ex)
-            {
-                //Logger.Error($"{ex}");
-                return false;
-            }
-        }
+        /// <param name="parentGuid">Родительский гуид</param>
+        /// <returns>Успех</returns>
+        bool CreateMetadataForChild(out MetadataOfDocument metadataOfDocument);
+
+    }
 ```
-Данный метод был перенесен в статический класс FilePathManager, который будет отвечать за пути для файлов и их сравнение, являются ли в одном диске, в одной папке, одинаково ли названы итд...
+Из за наработок с разных веток произошла путаница и неразбериха. Сам документ закрывается тогда когда вызывается Dispose класса. Однако появились методы которые взаимодействуют с атрибутами документа или же меняют метадату закрывая после всех операций сам документ, отчего он при возможных дальнейших действий может вызвать ошибку. Идеальный вариант это избавление в конструкторе/деструкторе открытие - закрытие документа и свойств(геттера и сеттера) и написание методов с явным открытием и закрытием файла.
 
-# 2.4
-Для избегания постоянного открытия документа и чтение его метаданных использовалась переменная в DriverMessageHandler именуемая MetadataCache, которая очищается с определенным интервалом из настроек конфигураций(отчего сыграло с нами злую шутку, был момент когда во время печати сгорал кеш метаданных(время хранения иссякало)). Потому было два варианта решения задачи, правильная в виде создания отдельного потокобезопасного класса в виде списка элементов в которых хранится сама метадата, путь к файлу и булева IsOpen(нельзя удалять элемент с метадатой хотябы в тот момент когда он открыт в приложении). Неправильная же состояла в том чтобы просто увеличить в конфигурации время жизни кеша. Угадайте какой мы выбрали в рамках "главное быстро сделать и показать"? :)
-
-# 2.5
-Несоблюдение принципа инверсии зависимостей и внедрения зависимостей.
-Банальный пример с испольнованием логера
-код до
+___
+# 1.2
+Помню пару лет назад наткнулся на очень интересный баг в HOTA, когда играл в XL карту. Враг в виде бота использовал толи крылья левитации, толи сандали хождения по воде, в общем он остановил свой ход прямо на воде... В недоумении, я, использовав телепорт в город, ближайший к этому врагу, использовал сам хождение по воде. По правилам генерации хода, ты можешь пройти по воде, но только если твой ход заканчивается на суше. Я же смог заставить персонажа атаковать врага стоящего прямо на воде. По итогу выскочило окошко обмена войском/артефактами с самим собой :)
+Попробуем описать Действия
 ```cs
-public class ProductService
-{
-    private Logger logger = new Logger();
-
-    public void SaveProduct(Product product)
-    {
-        // Логика сохранения продукта
-        logger.Trace("Продукт сохранен");
-    }
+public interface TurnGeneration {
+    void makeMove();
+    void makeAttack();
+    void passThroughSea();
+    void teleport();
 }
 ```
 
-код после
-```cs
-public interface ILogger
-{
-    void Trace(string message);
-}
-
-public class FileLogger : ILogger
-{
-    public void Trace(string message)
-    {
-        // 
-    }
-}
-
-public class FileManager
-{
-    private ILogger logger;
-
-    public FileManager(ILogger logger)
-    {
-        this.logger = logger;
-    }
-
-    public void SaveFile(Product product)
-    {
-	    //...
-        //Logger.Trace("Файл сохранен");
-        //...
-    }
-}
-```
-
-Таким образом мы смогли ослабить зависимости. Теперь мы можем поменять конкретную реализацию ILogger не меняя ничего как в FileManager, так и в остальных классах.
-# 2.6
-На старой работе при отправке задачи на согласование по регламенту, подписывающим являлся род класс Recipient, он высчитывался от дочерних Employee(Employee-User-Recipient) - сотрудник или User(User-Recipient) - пользователь(контрагент). И в схеме был блок для подписания, и именно там было приведение типа подписывающего и в зависимости от типа выполнялись разные действия. Как вариант не приводить к Recipient, унаследовать род класс интерфейс IRecipient. Указать в конструкторе класса задачи не класс исполнителя, а именно интерфейс. Таким образом Задача стартует, в блоке подписывания явно сделать варианты для сотрудника и контрагента.
-# 2.7
-В рабочих проектах не встречалось, постараюсь развить мысль на любимом DwarfFortress.
-Руководство решило выпустить новое масштабное обновление чтобы порадовать своих игроков новым сеттингом, а именно зомби.
-У нас есть много классов в виде дворфов, собак, кошек...каштанового дерева.
-Самый плохой вариант это наследоваться от классов выше и переписывать/расширять логику (DwarfZombie,DogZombie...), да и как так тогда реализовать логику заражения? Удалять объект дворфа и генерировать на основе его полей нового? Переносить всю историю его любви к табуреткам будет проблематично.
-Как вариант вижу использование паттерна Декоратор. Создаем класс ZombieDecorator 
-```cs
-public abstract class CharacterDecorator : Character
-{
-    protected Character character;
-
-    public CharacterDecorator(Character character)
-    {
-        this.character = character;
-    }
-}
-public class ZombieDecorator : CharacterDecorator
-{
-    public ZombieDecorator(Character character) : base(character) { }
-
-    public override string Say()
-    {
-        return character.Say() + "О кстати у тебя есть лишние мозги? Друг спрашивает...";
-    }
-}
-```
-
-Уверен ответ не очень оптимальный но как ни крутил, не смог придумать ничего более. Ведь если происходит ситуация когда нужно создать наследника, а по итогу и у остальных приходится это делать, то что это может означать? Когда ситуация А->А1 B->B1 C->C1 то не лучше ли будет рассмотреть 1 как явление отдельным классом или набором методов?  
-# 2.8
-Наследники должны расширять но не переопределять методы родительского класса, иначе наследование будет не истинным. Решается паттерном посетитель.
+Как возможный вариант исправления такой ошибки это создание состояний внутри класса и использования их для контроллирования выполнения методов сделать ход, совершить нападение, пройти сквозь воду, телепортироваться.
+___
+# 2.1
+ProgramManager это класс который сопоставляет расширение документа с исполняемым файлом(где по умолчанию первый элемент в списке).
 Код до
 ```cs
-class Animal
-{
-    public virtual void MakeSound()
-    {
-        Console.WriteLine("Animal makes a sound.");
-    }
-}
+public ProgramManager()
+        {
+            DefalutProgram = new Dictionary<string, LinkedList<string>>(){
+            {"docx", new LinkedList<string>( new List<string> { "word", "librewriter", "myofficetext", "r7office" }) },
+            {"odt", new LinkedList<string>( new List<string> { "word", "librewriter", "myofficetext", "r7office" }) },
+            {"doc", new LinkedList<string>( new List<string> { "word", "librewriter", "myofficetext", "r7office" }) },
 
-class Dog : Animal
-{
-    public override void MakeSound()
-    {
-        Console.WriteLine("Bark.");
-    }
-}
-class Cat : Animal
-{
-    public override void MakeSound()
-    {
-        Console.WriteLine("Meow.");
-    }
-}
+            {"xlsx", new LinkedList<string>( new List<string> { "myofficeexcel", "librecalc", "myofficenf", "kbwf", "r7office" }) },
+            {"ods", new LinkedList<string>( new List<string> { "myofficeexcel", "librecalc", "myofficenf", "kbwf", "r7office" }) },
+            {"xls", new LinkedList<string>( new List<string> { "myofficeexcel", "librecalc", "myofficenf", "kbwf", "r7office" }) },
+
+            {"pptx", new LinkedList<string>( new List<string> { "powerpoint(MO)", "impress(LO)", "myofficepresentation", "r7office" }) },
+            {"odp", new LinkedList<string>( new List<string> { "powerpoint(MO)", "impress(LO)", "myofficepresentation", "r7office" }) },
+            {"ppt", new LinkedList<string>( new List<string> { "powerpoint(MO)", "impress(LO)", "myofficepresentation", "r7office" }) },
+
+            {"pdf", new LinkedList<string>( new List<string> {"Acrobat Rider", "FoxitReader" }) },
+
+            {"vsd", new LinkedList<string>( new List<string> {"visio" }) },
+            {"vsdx", new LinkedList<string>( new List<string> {"visio" }) }
+        };
 ```
+
 Код после
 ```cs
-class Animal
+public ProgramManager(Dictionary<string, LinkedList<string>>() programRule)
 {
-    public virtual void Accept(AnimalVisitor visitor)
-    {
-        visitor.Visit(this);
-    }
+	DefalutProgram = programRule;
 }
+```
 
-class Dog : Animal
+Что по итогу хуже, программа которая упала при инициализации из за сломанного формата json в config файле, или же скрытый баг запуска ворда, хотя пользователь ожидал либру? Второе, поскольку последние логи остановятся именно на попытке десериализации конфигурационного файла и будет сразу же понятна ошибка, в отличии от того что тебе дают простыню логов и попробуй найти тот участок в котором ProgramManager не запустился так как надо.
+
+___
+# 2.2
+Допустим мы ввели донаты для нашей ммо и теперь, игроки купившие подписку могут получить бонус здоровья и маны на старте игры.
+```cs
+public class Orc
 {
-    public override void Accept(AnimalVisitor visitor)
+    public int HealthPoints { get; set; }
+    public int Mana { get; set; }
+
+    // Пустой конструктор
+    public Orc()
     {
-        visitor.Visit(this);
-    }
-}
-
-class Cat : Animal
-{
-    public override void Accept(AnimalVisitor visitor)
-    {
-        visitor.Visit(this);
-    }
-}
-
-interface AnimalVisitor
-{
-    void Visit(Animal animal);
-    void Visit(Dog dog);
-    void Visit(Cat cat);
-}
-
-class SoundAnimalVisitor : AnimalVisitor
-{
-    public void Visit(Animal animal)
-    {
-        Console.WriteLine("Animal makes a sound.");
     }
 
-    public void Visit(Dog dog)
+    // Конструктор с параметрами
+    public Orc(int healthPoints, int mana)
     {
-        Console.WriteLine("Bark.");
-    }
-
-    public void Visit(Cat cat)
-    {
-        Console.WriteLine("Meow.");
+        HealthPoints = healthPoints;
+        Mana = mana;
     }
 }
 ```
-Однако если посмотреть в рамках задания 3.2 то это будет считаться антипаттерном, ведь животинка издает звук? Да но по своему, сложность этого действия минимальна. Легче не думать и сделать за 5 минут чем подумать 5 минут и сделать, разница лишь в том что думать сможешь меньше на более важные вещи. Сам смысл паттерна скорее в применении более серьезной и разносторонней логики под одинаковым действием. 
+Самый плохой случай когда оставили пустым конструктор, может возникнуть баг что любой игрок, платил он или нет, на старте игры сразу же помрет(дефолтное значение здоровья 0), а все потому что кто-то обязательно забудет/не вспомнит/даже не знает о том что пустой конструктор не имеет явного определения для полей.
+Исправим
+```cs
+public class Orc
+{
+    public int HealthPoints { get; set; }
+    public int Mana { get; set; }
+
+    // Пустой конструктор
+    public Orc()
+    {
+	    HealthPoints = 100;
+	    Mana = 100;
+    }
+
+    // Конструктор с параметрами
+    public Orc(int healthPoints, int mana)
+    {
+        HealthPoints = healthPoints;
+        Mana = mana;
+    }
+}
+```
+Вроде получше, но вот беда, донатеры генерят своих персонажей с базовыми здоровьем/маной хотя мы явно обещали бонусы, а все потому что кто-то обязательно забудет/не вспомнит/ не заметит вызова пустого класса в котором поля по умолчанию.
+Решение очевидное, оставить конструктор в котором определяются все поля. Вызывать же конструктор там где мы уже получили будущие значения полей персонажа.
+```cs
+if (player.LicenseType == "Бесплатная")
+{
+    Orc orc = new Orc(100, 100);
+    return;
+}
+if (player.LicenseType == "VIP")
+{
+    Orc orc = new Orc(120, 120);
+    return;
+}
+```
+___
 # 3.1
-Раньше метод по отправке сообщений принимал ряд параметров для файла.
-Возникала путаница когда функционал дорос до того чтобы отправлять уведомление на сервер с гуидом родителя, приходилось во многих местах явно создавать новые переменные которых недоставало для метода отправки события файла.
-Решением же стало выделение в отдельный EventFile класс, добавление полей и их последующее заполнение находится теперь только в конструкторе, ибо все нужные нам значения находятся в классе метадаты документа.
-Даже если параметров много и все они разного типа, то нужно подняться на уровень меты выше, ибо они могут описывать 1 сущность с которой работать гораздо удобнее.
-
-# 3.2 
-Допустим мы реализовываем клон To-do, а следовательно создаем систему по управлению списком задач. Используем паттерн Команда
+Явным примером будет создание перечисления DocumentExtensions и OfficePrograms для работы с получением расширения и исполняемого файла для него.
 ```cs
-public class Task
+	public enum DocumentExtensions
+    {
+        docx,
+        pdf,
+        odt,
+        //...
+    }
+    public enum OfficePrograms
+    {
+        word,
+        myofficetext,
+        r7office,
+        //...
+    }
+```
+На самом деле легче не потому что сложнее ошибиться/опечататься при работе  с расширением, а потому что не надо вспоминать ключевые слова триггеры которые мы передаем в аргументы приложения.
+___
+# 3.2
+Представим ситуацию когда мы разрабатываем симулятор свиданий, нам нужно помочь Кеке завоевать сердце Бабы
+```cs
+// Baba Is Hot
+if (answer == 1)
 {
-    public string Title { get; set; }
-    public string Description { get; set; }
-    public bool IsCompleted { get; set; }
+    attractivenessRatingBabas -= AttractivenessRating.VeryBad;
+    return;
 }
-public class CreateTaskCommand
+// Kiss Is Win
+if (answer == 2)
 {
-    private TaskList _taskList;
-
-    public CreateTaskCommand(TaskList taskList)
-    {
-        _taskList = taskList;
-    }
-
-    public void Execute(string title, string description)
-    {
-        _taskList.AddTask(new Task { Title = title, Description = description });
-    }
+    attractivenessRatingBabas -= AttractivenessRating.Bad;
+    return;
 }
-
-public class ChangeTaskStatusCommand
+// Keke Has Choco And Flower
+if (answer == 3)
 {
-    private TaskList _taskList;
-
-    public ChangeTaskStatusCommand(TaskList taskList)
-    {
-        _taskList = taskList;
-    }
-
-    public void Execute(Task task, bool isCompleted)
-    {
-        _taskList.UpdateTaskStatus(task, isCompleted);
-    }
+    attractivenessRatingBabas -= AttractivenessRating.Neutral;
+    return;
+}
+// Keke Has Float
+if (answer == 4)
+{
+    attractivenessRatingBabas -= AttractivenessRating.Good;
+    return;
+}
+// Heart And Keke Is Melt
+if (answer == 5)
+{
+    attractivenessRatingBabas -= AttractivenessRating.VeryGood;
+    return;
 }
 ```
-Но какой смысл если можно написать и без паттерна
-```cs
-public class Task
-{
-    public string Title { get; set; }
-    public string Description { get; set; }
-    public bool IsCompleted { get; set; }
-}
 
-public class TaskList
-{
-    private List<Task> _tasks = new List<Task>();
-
-    public void AddTask(Task task)
-    {
-        _tasks.Add(task);
-    }
-
-    public void UpdateTaskStatus(Task task, bool isCompleted)
-    {
-        task.IsCompleted = isCompleted;
-    }
-
-    public void RemoveTask(Task task)
-    {
-        _tasks.Remove(task);
-    }
-}
-```
-Данный пример говорит не о SOLID как в предыдущих заданиях, а KISS
+Будет крайне удобно использовать перечисление вместо чисел для начисления очков привлекательности. Специально ограничиваем себя ради большего контроля, ведь что если мы начнем прибавлять +2, +100... получится что Baba Is Mad.
+___
+Данные примеры являются средством борьбы против главного врага программиста - его же самого, чем уже простор действий, тем более предсказуемое поведение.

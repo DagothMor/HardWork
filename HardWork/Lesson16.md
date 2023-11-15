@@ -1,246 +1,94 @@
-﻿# 1
-
-Старый заброшенный проект, который я делал до устройства на первую работу. Закрепление информации через дидактические карточки с таймингом по кривой Эббенгауза.
-https://github.com/DagothMor/CogniMnemo/tree/develop
-
-Архитектура - MVC, где View - работа с консолью, логика находится в папке Menus, Controller - вся логика над и с карточками, находится в папке Controllers.
-Модель на данный момент только карточка.
-
-```cs 
-public class Card
-	{
-		public int Id { get; set; }
-		// Дата создания
-		public DateTime DateOfCreation { get; set; }
-		// Дата последнего вызова
-		public DateTime DateOfLastRecall { get; set; }
-		// Дата следующего вызова
-		public DateTime DateOfNextRecall { get; set; }
-		// Уровень припоминания, чем меньше - тем чаще нужно припоминать.
-		public byte Level { get; set; }
-		// Вопрос
-		public string Question { get; set; }
-		// Ответ
-		public string Answer { get; set; }
-
-		//...
-	}
-```
-База данных максимально простая - в папке по местоположению исполняемого файла создается/открывается папка database, и все карточки инициализируются в память приложения, через txt файлы.
-
-Программа исполняла свои обязанности, однако нужно заняться рефакторингом, поскольку выдуманный заказчик посчитал что было бы неплохо прикрутить решение и для веба, и для телеграм бота, и для десктопа(на разные ОС с помощью open source приложения Avalonia), и локальное развертывание...Возможных требований много и потому наше приложение должно быть максимально гибким и безболезненно расширяемым.
-
-Рассмотрим точку входа:
+﻿# 1 Изменение отправки сигнала о документе между проектами
+Существует *Учебная* утилита работающая как FileMon
+https://learn.microsoft.com/ru-ru/sysinternals/downloads/procmon
+Есть специальный агент который ловит события от нашей учебной утилиты, делает анализ сигналов и после отправляет ответ файловой системе - разрешить доступ или же нет.
+Однако как игнорировать(обрабатывать если сигналы типа сохранения/создания...) сигналы которые будут идти от рабочих офисных приложений которые будут создавать тысячи сигналов к открытому документу?
+## До
+В приложении, которое анализирует доступ и решает с помощью какого офисного пакета открыть документ, создается объект байтового потока к открываемому документу.
 ```cs
-		static void Main(string[] args)
-		{
-			MainMenu.Start();
-		}
-		public static class MainMenu
-	{
-		public static void Start()
-		{
-			// TEST: Удаляем все карты для тестирования функционала.
-			// ОЧИЩАЕТ ПАПКУ БАЗЫ ДАННЫХ ОТ ВСЕХ СОЗДАННЫХ КАРТОЧЕК.
-			DataBaseInitialization.DeleteAllCardsInDataBase();
-			// Заполняем базу данных 
-			MockController.CreateListOfTemplateCards();
-			//todo:создать уведомление для ос о том что пора вспомнить карту(отталкиваясь от аттрибутов Last recall и level)
-			// TODO: Добавить функцию очищения корзины.
-			while (true)
-			{
-				Console.WriteLine($"Welcome {Environment.UserName} to the CorgiMneemo!" + Environment.NewLine +
-					"The best application for training your skills!");
-				Console.WriteLine("Main menu:" + Environment.NewLine +
-					"1-Training menu" + Environment.NewLine +
-					"2-Card menu." + Environment.NewLine +
-					"3-Options" + Environment.NewLine +
-					"4-Help" + Environment.NewLine +
-					"exit-exit from application");
-		//...
+try
+                    {
+                        // Посылаем сигнал драйверу, если драйвер(агент) откажет в открытии, то
+                        // Выскочет исключение access
+                        //using (var _ = new StreamReader(filePath)) { }
 ```
-На момент написания прошло 1000 дней, как быстро летит время...
+таким образом наша утилита улавливает это и передает агенту, он же, понимая по PID что это наше приложение, считывает метаданные документа и политику SID,сравнивает, если права у пользователя на взаимодействие документа есть - отправляем ответ файловой системе о разрешении, и наоборот. В конце в любом случае добавляем в кеш путь к документу - его метаданные.
 
-В Main методе происходит Вызов сценария главного меню, банальная ошибка в том что инициализация во время вызова домашнего ui. Мы еще не говорили о полном отсутствии логирования, возможном хуке от сервера для обновления базы данных карточек, вызов системного уведомления о том что N количество дидактических карт уже стоит припомнить на данный момент...
-
-Конечно же решением будет добавление внедрения зависимостей.
+## После
+Сложности возникли в связи с созданием документа, если промониторить по ProcMon можно посмотреть ряд сигналов от файловой системы, как происходит создание docx на рабочий стол(по большей части идет не создание, а копирование из папки с шаблонными документами AppData/Roaming/Microsoft/Templates/).
+Вот тут и начинается гонка/ бег в перед паровоза. То сигналы приходят когда файл занят процессом проводника, то приходят на еще не существующий файл, якобы наш новый по нашему пути.
+Так же как нам понять что сигнал относится к тому файлу который на данный момент открыт? Как понять что он закрылся? И именно рабочими офисными приложениями?
+Решением стало работой с новым и клонирующим файлом на уровне приложения а не агента. Но в таком случае придется игнорировать вызовы на уровне агента, а он должен знать метадату при будущем открытии файла. Здесь же поможет межпроцессорная коммуникация крутящаяся в отдельных задачах.
+https://learn.microsoft.com/ru-ru/dotnet/api/system.io.pipes.namedpipeserverstream?view=net-7.0
 ```cs
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
+private async Task FileMetadataCacheMonitor()
+        {
+            while (!_cancellationTokenSrc.IsCancellationRequested)
+            {
+                //Logger.Trace($"[{Thread.CurrentThread.ManagedThreadId}]{nameof(ProcessMonitor)}.{nameof(FileMetadataCacheMonitor)}. ->");
+                await using var pipeClient = new NamedPipeClientStream(".", "FileMetadataPipe", PipeDirection.In);
 
-public class Program
-{
-    public static void Main(string[] args)
-    {
-        var serviceProvider = new ServiceCollection()
-            .AddLogging()
-            .AddSingleton<IConsoleService, ConsoleService>()
-            .BuildServiceProvider();
+                // Connect to the pipe or wait until the pipe is available.
+                //Logger.Trace($"[{Thread.CurrentThread.ManagedThreadId}]{nameof(ProcessMonitor)}.{nameof(FileMetadataCacheMonitor)}. Attempting to connect to pipe...");
+                await pipeClient.ConnectAsync();
 
-        //configure console logging
-        serviceProvider
-            .GetService<ILoggerFactory>()
-            .AddConsole(LogLevel.Debug);
+                //Logger.Trace($"[{Thread.CurrentThread.ManagedThreadId}]{nameof(ProcessMonitor)}.{nameof(FileMetadataCacheMonitor)}. Connected to pipe.");
+                using var sr = new StreamReader(pipeClient);
 
-        var logger = serviceProvider.GetService<ILoggerFactory>()
-            .CreateLogger<Program>();
-        logger.LogDebug("Start application.");
+                var filePath = await sr.ReadLineAsync();
 
-        var consoleService = serviceProvider.GetService<IConsoleService>();
-        consoleService.Start();
-        logger.LogDebug("End application.");
-    }
-}
+                if (string.IsNullOrEmpty(filePath))
+                {
+                ///...
+                // Взаимодействуем с кешем
+                ///...
+
+private async Task OpenFileByProxyMonitor()
+        {
+            while (!_cancellationTokenSrc.IsCancellationRequested)
+            {
+                //Logger.Trace($"[{Thread.CurrentThread.ManagedThreadId}]{nameof(ProcessMonitor)}.{nameof(OpenFileByProxyMonitor)}. ->");
+                await using var pipeClient = new NamedPipeClientStream(".", "Filepath_PidProxy_OpenPipe", PipeDirection.In);
+                ///...
+                // Взаимодействуем с кешем
+                ///...
+
+private async Task CloseFileByProxyMonitor()
+        {
+            while (!_cancellationTokenSrc.IsCancellationRequested)
+            {
+                //Logger.Trace($"[{Thread.CurrentThread.ManagedThreadId}]{nameof(ProcessMonitor)}.{nameof(CloseFileByProxyMonitor)}. ->");
+                await using var pipeClient = new NamedPipeClientStream(".", "Filepath_PidProxy_ClosePipe", PipeDirection.In);
+                ///...
+                // Взаимодействуем с кешем
+                ///...
+                
+
+
 ```
-# 2
-Однако возникает вопрос на уровень выше, как хранить и обрабатывать базу данных? Точно ли карточка это просто вопрос - ответ - когда вспомнил/вспомнишь? Будет ли всегда текстом или может заказчик захочет работать с MarkDown? Как хранить файлы? Какую базу данных использовать, или же как сделать так чтобы было легко заменять саму базу данных? Будут ли данные храниться локально, или же отправляться на сервер?
-Неизвестно, потому предоставим выбор пользователю. Предположим что во время установки мы запросим ip сервера, который будет хранить все дидактические карточки пользователя, если он не авторизован или у него нет учетной записи, или, если он желает хранить локально, то предоставим ему следующий выбор: Хранить всю картотеку в базе данных, или же списком файлов, который пользователь может редактировать в любом удобном для него редакторе. Сам выбор будет храниться в конфигурационном файле. И если работа с разными реляционными бд(postgres,sql server,mysql...) понятна посредством ORM, то как добавить функционал по работе с txt файлами?
 
-Будем работать с базой данных, хранящейся непосредственно в памяти приложения.
-
+Вызов
 ```cs
-protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
-{
-    if (isLocal)
-    {
-        // Подключение к базе данных
-        optionsBuilder.UseSqlServer(connectionString);
-    }
-    else
-    {
-        // Использование файла
-        optionsBuilder.UseInMemoryDatabase("MyEntities");
-    }
-}
-
+case PlatformID.WinCE:
+                    {
+                        _fileMetadataCacheWatch = Task.Factory.StartNew(FileMetadataCacheMonitor);
+                        _openFileByProxyWatch = Task.Factory.StartNew(OpenFileByProxyMonitor);
+                        _closeFileByProxyWatch = Task.Factory.StartNew(CloseFileByProxyMonitor);
+                    }
+                    break;
 ```
 
-Инициализация будет происходить в конструкторе класса.
-```cs
-class MyContextInitializer : DropCreateDatabaseAlways<MyContext>
-{
-    protected override void Seed(MobileContext db)
-    {
-        Logger.Trace("Initialize a database...");
-		DataBaseInitialization.Start(MyContext);
-    }
-}
-```
-Таким образом мы смогли сохранить гибкость работы с хранилищем данных в виде обычной базой данных, так и с дружелюбным для пользователя вариантом в виде множества файлов, которые могут храниться локально и легко модифицироваться.
-# 3 
+Возникает другая ситуация - конкуренция за кеш.
+Решение - сделать кеш потокобезопасным 
+https://learn.microsoft.com/en-us/dotnet/api/system.collections.concurrent.concurrentdictionary-2?view=net-7.0
 
-Как же высчитывалось новое время для карточки которую мы припоминали?
-```cs
-while (true)
-				{
-					Console.WriteLine("is your answer correct? Y/N");
-					var userinput = Console.ReadLine();
-					if (userinput.ToLower() == "y")
-					{
-						TextController.RewriteTextAfterAnInputAttribute(oldercard.Id, "date of last recall", DateTime.Now.ToString() + Environment.NewLine);
-						oldercard.DateOfNextRecall = EbbinghausCurve.GetTimeRecallByForgettingCurve(DateTime.Now, oldercard.Level, '+');
-//...
-```
+Вывод в очередной раз интересен. Перенесли ряд логики из одной программы в другую, и по итогу приходится менять структуру данных и pipeline 
 
-Мы жестко привязаны к кривой Эббингауза, рассмотрим ее детальнее
-
-```cs
-public static class EbbinghausCurve
-	{
-		//																									TimeSpan(day,hour,minute,second)
-		private static readonly Dictionary<byte, TimeSpan> _ebbinghausCurve = new Dictionary<byte, TimeSpan>() { { 0, new TimeSpan(0,0,5)}
-																											, { 1, new TimeSpan(0,0,25) }
-																											, { 2, new TimeSpan(0,2,0) }
-																											, { 3, new TimeSpan(0,10,0) }
-																											, { 4, new TimeSpan(1,0,0) }
-																											, { 5, new TimeSpan(5,0,0) }
-																											, { 6, new TimeSpan(1,0,0,0) }
-																											, { 7, new TimeSpan(5,0,0,0) }
-																											, { 8, new TimeSpan(30,0,0,0) }
-																											, { 9, new TimeSpan(150,0,0,0) }
-																											, { 10, new TimeSpan(720,0,0,0) }
-																											, { 11, new TimeSpan(3600,0,0,0) }
-																											, { 12, new TimeSpan(21600,0,0,0) }
-		};
-		//todo:maybe need instead of dateoflastrecall just a datetime.now?
-		public static DateTime GetTimeRecallByForgettingCurve(DateTime dateOfLastRecall, byte level, char plusorminus)
-		{
-			return plusorminus=='+' ? dateOfLastRecall += _ebbinghausCurve[level]: level!=0?dateOfLastRecall += _ebbinghausCurve[level--]: dateOfLastRecall += _ebbinghausCurve[0];
-		}
-	}
-
-```
-
-грамотным решением будет инвертировать зависимость, а так же почистить код.
-Ограничим уровни с отрицательными значениями, заменим + - булевой БылаЗапомнена
-```cs
-public interface IForgettingCurve
-{
-    DateTime GetTimeRecallByForgettingCurve(DateTime dateOfLastRecall, UInt16 level, bool isMemorized)
-}
-
-public class EbbinghausCurveTimeRecallProvider : IForgettingCurve
-{
-    private static readonly Dictionary<UInt16, TimeSpan> _ebbinghausCurve = new Dictionary<UInt16, TimeSpan>()
-    {
-        { 0, new TimeSpan(0,0,5) },
-        { 1, new TimeSpan(0,0,25) },
-        { 2, new TimeSpan(0,2,0) },
-        { 3, new TimeSpan(0,10,0) },
-        { 4, new TimeSpan(1,0,0) }
-    };
-
-    public static DateTime GetTimeRecallByForgettingCurve(DateTime dateOfLastRecall, UInt16 level, bool isMemorized)
-		{
-			return isMemorized 
-				? dateOfLastRecall += _ebbinghausCurve[level]
-				: level!=0
-					? dateOfLastRecall += _ebbinghausCurve[level--]
-					: dateOfLastRecall += _ebbinghausCurve[0];
-		}
-}
-```
-
-Остается добавить в DI
-```cs
-var serviceProvider = new ServiceCollection()
-            .AddLogging()
-            .AddSingleton<IForgettingCurve, EbbinghausCurveTimeRecallProvider>()
-            .BuildServiceProvider();
-```
-
-Так мы смогли сделать настройку припоминания более гибкой, можно сделать гибче манипулируя со словарем, а именно уровнями припоминания и собирать статистику с людей занимающихся по модифицированной кривой забывания.
-
-# UseCases
-
-Главный актор: Пользователь
-
-Первый сценарий:
-1. Пользователь запускает приложение.
-2. Приложение отображает главное меню.
-3. Пользователь выбирает опцию "Добавить карточку".
-4. Приложение просит ввести вопрос
-5. Пользователь вводит вопрос
-6. Приложение просит ввести ответ
-7. Пользователь вводит ответ
-8. Приложение выводит введенный вопрос и ответ, спрашивая пользователя о корректности
-9. Пользователь подтверждает
-10. Приложение сохраняет карточку в базе данных и спрашивает пользователя хочет ли он добавить еще одну карточку
-11. Если пользователь отказывается, переход к пункту 2, иначе в пункт 4 
-12. Окончание первого сценария.
-
-Второй сценарий:
-1. Пользователь запускает приложение.
-2. Приложение отображает главное меню.
-3. Пользователь выбирает опцию "Начать припоминание".
-4. Приложение ищет карточку, дата припоминания которой ближе всего к текущему времени, или та что больше всех просрочена
-5. Если приложение не нашло ни одной карточки - уведомляет пользователя об отсутствии карточек для припоминания и переходит в пункт 2
-6. Если карточка найдена то приложение показывает вопрос карточки пользователю
-7. Пользователь пишет свой ответ на основе этой карточки
-8. Приложение показывает ответ карточки и ответ пользователя, спрашивая его, корректно ли он ответил на основе ответа карточки
-9. Если пользователь подтверждает то приложение увеличивает дату припоминания на уровень+ от карточки
-10. Если пользователь указал что не смог корректно вспомнить то приложение уменьшает уровень карточки, регистрируя новую дату для припоминания
-11. Приложение спрашивает хочет ли пользователь продолжить
-12. Если пользователь соглашается то переход в пункт 4
-13. Если пользователь отказывается то переход в пункт 2
-14. Окончание второго сценария.
+# 2 Дидактические карточки везде и всегда.
+В прошлом 16 ответе мы добавляли Dependency injection. Представим что нам потребуется проверять дидактические карточки целый день в независимости от того за чем мы сидим, телефон(телеграм бот), свой компьютер(локальное приложение), офисный(допустим, припоминаем через браузер, развернули сайт на своем компьютере.)
+И если работа через телеграм бот или браузер понятна(сплошные апи запросы на сервер), то работа с локальным компьютером поинтереснее, поскольку мы можем пометить галкой что на нашем локальном компьютере будет мастер бд, и работать мы будем с ней как на локальном, так и через апи.
+Как обновлять мастер бд, учитывая что мы можем работать как с телефона так и с локального одновременно/часто переключаясь.
+Как вариант - работа с бд только через api, как принимать запросы по сети так и через межпроцессорные протоколы.
+Однако нам нужно своевременное обновление(добавили вопрос-ответ через телеграм, получили файлик на локальном компьютере.)
+Решением будет создание вебхуков.
+Таким образом мы разделили работу с бд отдельным сервисом,который так же сможет присылать своевременно уведомления браузеру/компьютеру

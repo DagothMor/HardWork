@@ -1,94 +1,153 @@
-﻿# 1 Изменение отправки сигнала о документе между проектами
-Существует *Учебная* утилита работающая как FileMon
-https://learn.microsoft.com/ru-ru/sysinternals/downloads/procmon
-Есть специальный агент который ловит события от нашей учебной утилиты, делает анализ сигналов и после отправляет ответ файловой системе - разрешить доступ или же нет.
-Однако как игнорировать(обрабатывать если сигналы типа сохранения/создания...) сигналы которые будут идти от рабочих офисных приложений которые будут создавать тысячи сигналов к открытому документу?
-## До
-В приложении, которое анализирует доступ и решает с помощью какого офисного пакета открыть документ, создается объект байтового потока к открываемому документу.
+﻿# 2
+
+# 2.1
+Для отслеживания печати существует отдельный класс printMonitor, во время проверки мы ищем имя в списке являющийся полем этого класса. Добавление происходит только во время обработки сигнала драйвера, и только тогда когда у пути к этому файлу есть метадата и только когда ответ не default а allow. Путаницы из за этого было много, приходилось искать ссылки кто куда кому отправляет на 2-3 шага.
+
 ```cs
-try
-                    {
-                        // Посылаем сигнал драйверу, если драйвер(агент) откажет в открытии, то
-                        // Выскочет исключение access
-                        //using (var _ = new StreamReader(filePath)) { }
+    /// <summary>
+    /// Монитор печати.
+    /// </summary>
+    /// Используется службой для контроля всех файлов, отправленных пользователем на печать.
+    internal class PrintMonitor
+    {
+        /// <summary>
+        /// Список имён файлов.
+        /// </summary>
+        private List<string> _cacheFileNames = new List<string>();
+	///...
+	if (CheckPath(documentName)){
+		printJob.InvokeMethod("Resume", null);
+        _printFileName = _cacheFileNames.Find(c => documentName.Contains(Path.GetFileNameWithoutExtension(c)));
+	///...
+}
 ```
-таким образом наша утилита улавливает это и передает агенту, он же, понимая по PID что это наше приложение, считывает метаданные документа и политику SID,сравнивает, если права у пользователя на взаимодействие документа есть - отправляем ответ файловой системе о разрешении, и наоборот. В конце в любом случае добавляем в кеш путь к документу - его метаданные.
 
-## После
-Сложности возникли в связи с созданием документа, если промониторить по ProcMon можно посмотреть ряд сигналов от файловой системы, как происходит создание docx на рабочий стол(по большей части идет не создание, а копирование из папки с шаблонными документами AppData/Roaming/Microsoft/Templates/).
-Вот тут и начинается гонка/ бег в перед паровоза. То сигналы приходят когда файл занят процессом проводника, то приходят на еще не существующий файл, якобы наш новый по нашему пути.
-Так же как нам понять что сигнал относится к тому файлу который на данный момент открыт? Как понять что он закрылся? И именно рабочими офисными приложениями?
-Решением стало работой с новым и клонирующим файлом на уровне приложения а не агента. Но в таком случае придется игнорировать вызовы на уровне агента, а он должен знать метадату при будущем открытии файла. Здесь же поможет межпроцессорная коммуникация крутящаяся в отдельных задачах.
-https://learn.microsoft.com/ru-ru/dotnet/api/system.io.pipes.namedpipeserverstream?view=net-7.0
+
 ```cs
-private async Task FileMetadataCacheMonitor()
+        private bool CheckPath(string spoolerDocName)
         {
-            while (!_cancellationTokenSrc.IsCancellationRequested)
+            string filePath = _cacheFileNames.Find(c => spoolerDocName.Contains(Path.GetFileNameWithoutExtension(c)));
+            ///...
+```
+
+```cs
+/// <summary>
+        /// Обработчик события клиента драйвера о получении нового файла.
+        /// </summary>
+        /// <param name="sender">Отправитель события является клиента драйвера.</param>
+        /// <param name="args">Параметры события содержат строку полного имени нового файла, к которому драйвер зафиксировал обращение пользователя.</param>
+        private void NotificationProcessor_FullPathReceived(object sender, FileNotifyEventArgs args)
+        {
+            //Logger.Trace($"[{Thread.CurrentThread.ManagedThreadId}]{nameof(PrintMonitor)}.{nameof(NotificationProcessor_FullPathReceived)}. ->");
+
+            if (!String.IsNullOrWhiteSpace(args.FileFullPath))
             {
-                //Logger.Trace($"[{Thread.CurrentThread.ManagedThreadId}]{nameof(ProcessMonitor)}.{nameof(FileMetadataCacheMonitor)}. ->");
-                await using var pipeClient = new NamedPipeClientStream(".", "FileMetadataPipe", PipeDirection.In);
-
-                // Connect to the pipe or wait until the pipe is available.
-                //Logger.Trace($"[{Thread.CurrentThread.ManagedThreadId}]{nameof(ProcessMonitor)}.{nameof(FileMetadataCacheMonitor)}. Attempting to connect to pipe...");
-                await pipeClient.ConnectAsync();
-
-                //Logger.Trace($"[{Thread.CurrentThread.ManagedThreadId}]{nameof(ProcessMonitor)}.{nameof(FileMetadataCacheMonitor)}. Connected to pipe.");
-                using var sr = new StreamReader(pipeClient);
-
-                var filePath = await sr.ReadLineAsync();
-
-                if (string.IsNullOrEmpty(filePath))
+                _resetEvent.Reset();
+                if (!_cacheFileNames.Contains(args.FileFullPath))
                 {
-                ///...
-                // Взаимодействуем с кешем
-                ///...
+                    _cacheFileNames.Add(args.FileFullPath);
+                }
+                _resetEvent.Set();
 
-private async Task OpenFileByProxyMonitor()
-        {
-            while (!_cancellationTokenSrc.IsCancellationRequested)
-            {
-                //Logger.Trace($"[{Thread.CurrentThread.ManagedThreadId}]{nameof(ProcessMonitor)}.{nameof(OpenFileByProxyMonitor)}. ->");
-                await using var pipeClient = new NamedPipeClientStream(".", "Filepath_PidProxy_OpenPipe", PipeDirection.In);
-                ///...
-                // Взаимодействуем с кешем
-                ///...
+                //Logger.Trace($"[{Thread.CurrentThread.ManagedThreadId}]{nameof(PrintMonitor)}.{nameof(NotificationProcessor_FullPathReceived)}. New File full path:{args.FileFullPath}");
+            }
 
-private async Task CloseFileByProxyMonitor()
-        {
-            while (!_cancellationTokenSrc.IsCancellationRequested)
-            {
-                //Logger.Trace($"[{Thread.CurrentThread.ManagedThreadId}]{nameof(ProcessMonitor)}.{nameof(CloseFileByProxyMonitor)}. ->");
-                await using var pipeClient = new NamedPipeClientStream(".", "Filepath_PidProxy_ClosePipe", PipeDirection.In);
-                ///...
-                // Взаимодействуем с кешем
-                ///...
-                
-
-
+            //Logger.Trace($"[{Thread.CurrentThread.ManagedThreadId}]{nameof(PrintMonitor)}.{nameof(NotificationProcessor_FullPathReceived)}. <-");
+        }
 ```
+___
 
-Вызов
 ```cs
-case PlatformID.WinCE:
+                case eProccessingResult.Allow:
                     {
-                        _fileMetadataCacheWatch = Task.Factory.StartNew(FileMetadataCacheMonitor);
-                        _openFileByProxyWatch = Task.Factory.StartNew(OpenFileByProxyMonitor);
-                        _closeFileByProxyWatch = Task.Factory.StartNew(CloseFileByProxyMonitor);
-                    }
-                    break;
+                    ///...
+                    // Сохранить для печати
+                        if (result.Metadata != null)
+                        {
+                            //Logger.Trace($"[{Thread.CurrentThread.ManagedThreadId}] Save file info for print monitoring");
+                            RiseFullPathReceived(notifyMsg.FullFilePath);
+                        }
+```
+Довольно хрупкая и ненадежная конструкция, в качестве исправления был выделен отдельный потокобезопасный кеш открытых документов, присылающихся через pipeline.
+# 2.2
+в легаси перегрузке метода добавления в кеш, была добавлена булева которая жестко назначала время жизни 1 день.
+```cs
+
+/// <summary>
+    /// Кеш обработанных файлов.
+    /// </summary>
+    public class FileDataCache : IFileDataCache
+    {
+	    public void Add(string fileName, MetadataDto metadata, bool isPrint = false)
+	        {
+        
+	            if (isPrint)
+	            {
+                elem = new FileDataCacheElement
+	                {
+                    Ttl = DateTime.UtcNow.AddDays(1),
+                    FileName = fileName,
+                    Metadata = metadata
+	                };
+	            }
+```
+в качестве фикса была реализована логика проверки лока файла при обновлении/вытаскивании элемента из кеша.
+
+```cs
+private bool IsExpired(string key, T value)
+        {
+            if (DateTime.UtcNow < value.Ttl.AddSeconds(-30)) return false;
+
+            Process[] winProcesses = Process.GetProcesses();
+
+            System.Collections.Generic.List<Process> processList = FileUtil.WhoIsLocking(value.FullPath);
+
+            if (processList.FirstOrDefault(c => TrustedApplications.Apps.Contains(c.ProcessName)) == null ||
+                winProcesses.FirstOrDefault(c => c.Id == value.PID) == null)
+            {
+                return this.TryRemove(key, out value);
+            }
+            value.UpdateTTLManually(DateTime.UtcNow.AddSeconds(_ttlSec));
+            
+            return false;
+        }
+```
+# 3 
+
+## 3.1
+чтение таблички не по индексу а по имени
+```cs
+public static bool StartParseRequests(string excelFilePath, out List<Request> requests)
+        {
+            requests = new List<Request>();
+            int currentRow = 1;
+            try
+            {
+                using (SpreadsheetDocument spreadsheetDocument = SpreadsheetDocument.Open(excelFilePath, false))
+                {
+                    WorkbookPart workbookPart = spreadsheetDocument.WorkbookPart;
+                    var sheets = workbookPart.Workbook.Descendants<Sheet>();
+                    var sheet = sheets.ToList()[2];
 ```
 
-Возникает другая ситуация - конкуренция за кеш.
-Решение - сделать кеш потокобезопасным 
-https://learn.microsoft.com/en-us/dotnet/api/system.collections.concurrent.concurrentdictionary-2?view=net-7.0
+для метода StartParseClients аналогично
+```cs
+var sheet = sheets.ToList()[1];
+```
+итд...
+Конечно же решением будет поиск не по индексу а по имени таблицы в excel. Таким образом мы избежим глупой ошибки если порядок sheet будет изменен при парсинге xlsx файла.
 
-Вывод в очередной раз интересен. Перенесли ряд логики из одной программы в другую, и по итогу приходится менять структуру данных и pipeline 
+# 3.2
 
-# 2 Дидактические карточки везде и всегда.
-В прошлом 16 ответе мы добавляли Dependency injection. Представим что нам потребуется проверять дидактические карточки целый день в независимости от того за чем мы сидим, телефон(телеграм бот), свой компьютер(локальное приложение), офисный(допустим, припоминаем через браузер, развернули сайт на своем компьютере.)
-И если работа через телеграм бот или браузер понятна(сплошные апи запросы на сервер), то работа с локальным компьютером поинтереснее, поскольку мы можем пометить галкой что на нашем локальном компьютере будет мастер бд, и работать мы будем с ней как на локальном, так и через апи.
-Как обновлять мастер бд, учитывая что мы можем работать как с телефона так и с локального одновременно/часто переключаясь.
-Как вариант - работа с бд только через api, как принимать запросы по сети так и через межпроцессорные протоколы.
-Однако нам нужно своевременное обновление(добавили вопрос-ответ через телеграм, получили файлик на локальном компьютере.)
-Решением будет создание вебхуков.
-Таким образом мы разделили работу с бд отдельным сервисом,который так же сможет присылать своевременно уведомления браузеру/компьютеру
+
+Допустим по спецификации мы из очереди сообщений получаем чек покупки продуктового магазина. Параметров в этом сообщении довольно много и есть степень важности некоторых полей(ценник товара, сумма товаров к оплате, скидка, купоны...)
+
+Однако если при реализации мы забудем(плохо реализуем валидацию второстепенных полей таких как адрес магазина, инн...) то получается что в базу данных для аналитиков будут добавляться не истинные данные, а от них может зависеть дальнейшая разработка будущих фич.
+# 4
+
+# 4.1 Кеш файлов.
+На данный момент из за отсутствия спецификации реализация все растет и растет, а именно добавляется срок сгорания + условия при которых элемент выйдет из жизни(занят ли текущий файл каким то процессом или нет.). Так же никто не отменяет будущее добавление веб хука от сервера(изменение безопасником правил доступа для файла.) Ну и конечно же сам кеш должен быть потокобезопасным, не просто add,tryget,update,remove, а обернутым в writelock readlock.
+# 4.2 Чтение/Запись файла
+Интерфейс для работы с файлом должен так же учитывать тот факт что файл может не успеть освободиться от закрывающегося процесса, нужно проверять кто занял файл и сколько попыток постучаться к этому файлу с какой переодичностью.
+# 4.3 Возврат значения даже при exception
+Конечно же мы можем чтото не учесть и реализация может выдать exception, но и после того как мы это исключение отловили в реализации нам все равно нужно чтото вернуть, потому для случаев 4.1 и 4.2 нужно создать отдельный тип который будет повествовать нам о результате операции (success,failed,timeout), в общем статус код.

@@ -6,18 +6,12 @@
     /// </summary>
     public class FileManager : IFileManager
     {
-        bool _isReadOnly = false;
-
-        private IGenericDocument _document;
-
-        private string _filePath;
-
-        private bool _needSaveToFile;
+        NDA
 
         /// <summary>
         /// Текущие метаданные в памяти.
         /// </summary>
-        /// Не путать с метаданными в самом файле. Этот параметр изменяется при работе с объектом.
+        /// 
         private NDA _metadata;
 
 

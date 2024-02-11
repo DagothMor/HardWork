@@ -1,138 +1,360 @@
-﻿# 2 Библиотеки для вытаскивания текста и изображений для старых форматов.
-## 2.1 Проблема платформы
-b2x работоспособен только на платформе .NET Core 3.1, его обновление вызывает краш, причем в очень интересном месте
-[месте](https://github.com/EvolutionJobs/b2xtranslator/blob/90d05a6589706cf177a245fcb74e9cba4b6264ae/Doc/WordprocessingMLMapping/MainDocumentMapping.cs#L40C21-L40C51)
-
-```
-https://habr.com/ru/companies/auriga/articles/528084/
-
-Если вы используете платформу _.Net Core 3_ и выше в своем решении, обратите внимание на целевые среды для подключенных проектов _b2xtranslator_. Так как библиотека была написана довольно давно и не обновляется с 2018 года, по умолчанию она собирается под .Net Core 2.  
-Чтобы сменить целевую среду, щелкните правой кнопкой мыши по проекту, выберите пункт «Свойства» и поменяйте целевую рабочую среду. В противном случае вы можете столкнуться с проблемой невозможности конвертации файлов .doc, содержащих в себе таблицы.
-```
-
-Оставим как есть, все равно будем собирать библиотеку-солянку.
-
-# 2.2 Отсутствие поддержки ppt -> pptx в b2xTranslator и NPOI
-Нет, серьезно.
-
-https://t.me/npoidevs
-введите поиск в чате ppt и сами удостоверьтесь, doc и ppt не поддерживаются NPOI, хотя [написано](https://github.com/tonyqus/npoi)
-
-```
-With NPOI, you can read/write Office 2003/2007 files very easily.
-```
-
-Ни мелкого шрифта, ни звездочки...
-
-в b2xTranslator функционал не доделан. Можно конечно погрузиться во все это вот, однако время ограничено + постоянные сложные ошибки.
-
-# 2.3 Получение текста из doc -> docx через b2x
-Да, текст вытаскивается, к сожалению буквально, а именно с тегами. Дополнительную сложность дают BOM символы для парсинга, регулярку нашли, однако еще нужно протестить, а целостная ли структура по стандарту OpenXML.
-
-# Итог
-Чем проблема узконаправленнее , тем уже функционал, лицензии и реализации, и тем глубже приходится копаться, вплоть до китайской документации и чатов.
-# 3 
-
-## 3.1 ExtractResult
-
-Созданы методы в библиотеке(Объединены текст и картинки, ибо на 10000 документов пришлось бы открывать 20000 MemoryStream)
+﻿# 1 Открытие файла
+## До
 ```cs
-public static ExtractResult GetTextAndImagesFromDoc(Stream docStream)
-public static ExtractResult GetTextAndImagesFromXls(Stream docStream)
-```
-Сама библиотека будет внедряться в другую, мной составлен возвращаемый тип.
-```cs
-    public class ExtractResult
+	/// <summary>
+    /// Управление файлом.
+    /// </summary>
+    public class FileManager : IFileManager
     {
-        public string File { get; set; }
-        public string Text { get; set; }
-        public System.Collections.Generic.List<Exception> textExceptions { get; private set; }
+        bool _isReadOnly = false;
+
+        private IGenericDocument _document;
+
+        private string _filePath;
+
+        private bool _needSaveToFile;
+
         /// <summary>
-        /// Список вырезанных картинок.
+        /// Текущие метаданные в памяти.
         /// </summary>
-        public System.Collections.Generic.List<ImageItem> ImageItems { get; private set; }
+        /// Не путать с метаданными в самом файле. Этот параметр изменяется при работе с объектом.
+        private NDA _metadata;
+
+
         /// <summary>
-        /// Словарь ошибок для исключений.
+        /// Текущие метаданные в памяти.
         /// </summary>
-        public System.Collections.Generic.Dictionary<string,Exception> imageErrors { get; private set; }
-
-        public ExtractResult()
+        public NDA Metadata
         {
-            this.ImageItems = new System.Collections.Generic.List<ImageItem>();
-            this.imageErrors = new System.Collections.Generic.Dictionary<string, Exception>();
-            this.textExceptions = new List<Exception>();
-        }
-    }
-```
-
-Таким образом для легкой адаптации можно использовать мой класс, или на крайний случай создать множество и передать его в библиотеку выше. Данные вернутся по максимуму, не только для бизнес логики, но и для отлаживания, так без проблем сможем мониторить статистику неудачных вытаскиваний картинок и текста из ячеек.
-
-# 3.2 Добавление отлова исключений в форке от b2xtranslator
-```cs
-public string Convert(Stream memStream,out List<Exception> exceptions)
-        {
-            exceptions = new List<Exception>();
-            Dictionary<int, string> listEl = new Dictionary<int, string>();
-
-            string xml = string.Empty;
-            memStream.Position = 0;
-            using (WordprocessingDocument doc = WordprocessingDocument.Open(memStream, false))
+            get
             {
-                StringBuilder sb = new StringBuilder(1000); // врядли в xml будет меньше 1000 символов
-                sb.Append("<?xml version=\"1.0\"?><documents><document>");
-                Body docBody = doc.MainDocumentPart.Document.Body; // тело документа (размеченный текст без стилей)
-                CreateDictList(listEl, docBody);
-                foreach (var element in docBody.ChildElements)
+                try
                 {
-                    string type = element.GetType().ToString();
-                    try
+                    if (_document == null)
                     {
-                        switch (type)
+                        _metadata = Read();
+                        if (_metadata == null)
                         {
-                            case "DocumentFormat.OpenXml.Wordprocessing.Paragraph":
-
-                                if (element.GetFirstChild<ParagraphProperties>() != null && element.GetFirstChild<ParagraphProperties>()
-                                    .GetFirstChild<NumberingProperties>() != null) // список / не список
-                                {
-                                    if (element.GetFirstChild<ParagraphProperties>().GetFirstChild<NumberingProperties>().GetFirstChild<NumberingId>().Val != CurrentListID)
-                                    {
-                                        CurrentListID = element.GetFirstChild<ParagraphProperties>().GetFirstChild<NumberingProperties>().GetFirstChild<NumberingId>().Val;
-                                        sb.Append($"<li id=\"{CurrentListID}\">");
-                                        InList = true;
-                                        ListParagraph(sb, (Paragraph)element);
-                                    }
-                                    else // текущий список
-                                    {
-                                        ListParagraph(sb, (Paragraph)element);
-                                    }
-                                    if (listEl.ContainsValue(((Paragraph)element).ParagraphId.Value))
-                                    {
-                                        sb.Append($"</li id=\"{element.GetFirstChild<ParagraphProperties>().GetFirstChild<NumberingProperties>().GetFirstChild<NumberingId>().Val}\">");
-                                    }
-                                    continue;
-                                }
-                                else // не список
-                                {
-                                    SimpleParagraph(sb, (Paragraph)element);
-                                    continue;
-                                }
-                            case "DocumentFormat.OpenXml.Wordprocessing.Table":
-
-                                Table(sb, (Table)element);
-                                continue;
+                            _needSaveToFile = false;
+                            return null;
+                        }
+                        if (_needSaveToFile)
+                        {
+                            Write(_metadata);
                         }
                     }
-                    catch (Exception e) // В случае наличия в документе тегов отличных от нужных, они будут проигнорированы
+                    return _metadata;
+                }
+                catch (Exception ex)
+                {
+                    return null;
+                }
+            }
+            set
+            {
+                if (value == null)
+                {
+                    return;
+                }
+
+                if (_document == null)
+                {
+                    _metadata = Read();
+                    if (_metadata == null)
                     {
-                        exceptions.Add(e);
-                        continue;
+                        throw new ArgumentException($"metadata is null.");
                     }
                 }
-                sb.Append(@"</document></documents>");
-                xml = sb.ToString();
+                if (!_needSaveToFile)
+                {
+                    //Logger.Trace("File is open only for read.");
+                    return;
+                }
+                Write(_metadata);
             }
-            return xml;
         }
 ```
 
-Теперь string Convert возвращает не только xml от потока doc файла, но и список исключений, возникающих при конвертации xml элементов.
+```cs
+		/// <summary>
+        /// Уничтожение объекта.
+        /// </summary>
+        public void Dispose()
+        {
+            if (_document != null)
+            {
+                if (_needSaveToFile)
+                {
+                    Save();
+                }
+                if (_document.IsOpen)
+                {
+                    _document.Close();
+                }
+
+                // После закрыти устанавливаем атрибут, если он был
+                if (_isReadOnly)
+                {
+                    FileInfo fileInfo = new FileInfo(_filePath);
+                    fileInfo.IsReadOnly = true;
+                }
+            }
+        }
+```
+
+```cs
+// ___
+// методы, меняющие метаданные текущего документа...
+// ___
+
+        /// <summary>
+        /// Прочитать метаданные из файла.
+        /// </summary>
+        /// <returns>Метаданные файла.</returns>
+        private MetadataDto Read()
+        {
+        
+```
+
+Да, чтобы получить метаданные, в легаси вызывался метод read(), в котором первым делом проверялось поле `_filepath` на null..., после пытаемся открыть документ (это еще было без количества попыток открытий(попыток постучаться через N секунд, ибо процессы(word например, который открыл этот документ) могут не так быстро закрываться)).
+в общем так ЧТЕНИЕ файла, превращается в ПРОВЕРКУ пути файла, его СУЩЕСТВОВАНИЕ, ПОПЫТКА открытия...
+
+**"Отец, прости им, ибо они не ведают, что творят"**
+
+## После
+```cs
+using System;
+using System.IO;
+
+// IFileState Interface
+public interface IFileState
+{
+    void Open(FileContext context);
+    void ChangeContents(FileContext context, string content);
+    void Close(FileContext context);
+}
+
+// FileClosed Class
+public class FileClosed : IFileState
+{
+    public void Open(FileContext context)
+    {
+        Console.WriteLine("File is opened.");
+        context.State = new FileOpen(); // Change state to FileOpen
+    }
+
+    public void ChangeContents(FileContext context, string content)
+    {
+        Console.WriteLine("Cannot change contents. File is not open.");
+    }
+
+    public void Close(FileContext context)
+    {
+        Console.WriteLine("File is already closed.");
+    }
+}
+
+// FileOpen Class
+public class FileOpen : IFileState
+{
+    public void Open(FileContext context)
+    {
+        Console.WriteLine("File is already open.");
+    }
+
+    public void ChangeContents(FileContext context, string content)
+    {
+        // Example: Writing content to a file (you can include the file path in the context)
+        Console.WriteLine("Changing file contents.");
+        File.WriteAllText(context.FilePath, content);
+    }
+
+    public void Close(FileContext context)
+    {
+        Console.WriteLine("File is closed.");
+        context.State = new FileClosed(); // Change state to FileClosed
+    }
+}
+
+// FileContext Class
+public class FileContext
+{
+    public IFileState State { get; set; }
+    public string FilePath { get; set; }
+
+    public FileContext(string filePath)
+    {
+        State = new FileClosed(); // Initial state
+        FilePath = filePath;
+    }
+
+    public void Open()
+    {
+        State.Open(this);
+    }
+
+    public void ChangeContents(string content)
+    {
+        State.ChangeContents(this, content);
+    }
+
+    public void Close()
+    {
+        State.Close(this);
+    }
+}
+
+// Usage
+class Program
+{
+    static void Main(string[] args)
+    {
+        FileContext fileContext = new FileContext("example.txt");
+        fileContext.Open(); // Opens the file
+        fileContext.ChangeContents("Hello, World!"); // Changes the contents
+        fileContext.Close(); // Closes the file
+    }
+}
+```
+# 2 IRPC пайпы через FSM
+У пайп конечно же тоже есть состояния, попытка соединения, ожидание чтения, обработка, ожидание следующего сообщения.
+Реализация До не показывает явно эти состояния, они конечно есть, но на абстрактном уровне этого кода.
+## До
+```cs
+private async static Task<bool> SendPIDofClosedCurrentProcess(long PID)
+        {
+            try
+            {
+                var pipeServer = new NamedPipeServerStream("ClosedCurrentProcess_PID_ClosePipe", PipeDirection.Out);
+                await pipeServer.WaitForConnectionAsync();
+                var sw = new StreamWriter(pipeServer);
+                sw.AutoFlush = true;
+                sw.WriteLine(PID);
+            }
+            catch (IOException e)
+            {
+            }
+            finally
+            {
+            }
+            return true;
+        }
+```
+
+```cs
+while (!_cancellationTokenSrc.IsCancellationRequested)
+            {
+                await using var pipeClient = new NamedPipeClientStream(".", "ClosedCurrentProcess_PID_ClosePipe", PipeDirection.In);
+                await pipeClient.ConnectAsync();
+                
+                using var sr = new StreamReader(pipeClient);
+
+                var PIDString = await sr.ReadLineAsync();
+
+                if (string.IsNullOrEmpty(PID))
+                {
+                    await Task.Delay(1000);
+                    continue;
+                }
+                long PID;
+                if (!Int64.TryParse(PID, out PID))
+                {
+                    await Task.Delay(1000);
+                    continue;
+                }
+                ///
+                // NDA
+                ///
+
+                await Task.Delay(1000);
+            }
+```
+
+# После
+```cs
+public class PipeClientStateMachine
+{
+    private enum State
+    {
+        Connecting,
+        Reading,
+        Processing,
+        Waiting
+    }
+
+    private State _currentState = State.Connecting;
+    private CancellationToken _cancellationToken;
+
+    public PipeClientStateMachine(CancellationToken cancellationToken)
+    {
+        _cancellationToken = cancellationToken;
+    }
+
+    public async Task RunAsync()
+    {
+        while (!_cancellationToken.IsCancellationRequested)
+        {
+            switch (_currentState)
+            {
+                case State.Connecting:
+                    await ConnectAsync();
+                    break;
+                case State.Reading:
+                    await ReadAsync();
+                    break;
+                case State.Processing:
+                    Process();
+                    break;
+                case State.Waiting:
+                    await WaitAsync();
+                    break;
+            }
+        }
+    }
+
+    private async Task ConnectAsync()
+    {
+        await using var pipeClient = new NamedPipeClientStream(".", "ClosedCurrentProcess_PID_ClosePipe", PipeDirection.In);
+        await pipeClient.ConnectAsync(_cancellationToken);
+        _currentState = State.Reading;
+    }
+
+    private async Task ReadAsync()
+    {
+        await using var pipeClient = new NamedPipeClientStream(".", "ClosedCurrentProcess_PID_ClosePipe", PipeDirection.In);
+        using var sr = new StreamReader(pipeClient);
+        var PID = await sr.ReadLineAsync();
+
+        if (!string.IsNullOrEmpty(PID))
+        {
+            _currentState = State.Processing;
+        }
+        else
+        {
+            _currentState = State.Waiting;
+        }
+    }
+
+    private void Process()
+    {
+        _currentState = State.Waiting;
+    }
+
+    private async Task WaitAsync()
+    {
+        await Task.Delay(1000);
+        _currentState = State.Connecting;
+    }
+}
+```
+
+Да и на самом то деле я сам не ведал что творил, знаний о FSM было практически ноль. Тяжело было изучать эту тему, слишком много информации и в рамках system design, и нововведений c# (даже новая идея появилась для блога: Class, Struct, Record)
+
+Ознакомился про базовую спецификацию для FSM и несколько путей реализации, включая сам паттерн State.
+Выучил что у классов состояния по большей части замыленные и в абстрактном мире. Этого не должно быть. В рамках разработки я, беря яблоко в руки, должен не только описывать методы взаимодействия с ним, но и явно указывать его состояния, тогда разработчик маловероятно будет писать код:
+```cs
+var myApple = new Apple();
+var myNPC = new NPC();
+var rottenApple = myApple.TimeOfExist += 1 year;
+myNPC.Heal(rottenApple);
+```

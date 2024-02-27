@@ -34,7 +34,7 @@
   </PropertyGroup>
   <ItemGroup>
     <None Include="App.config" />
-    <None Include="Lesson28.md" />
+    <None Include="Lesson29.md" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="Images\20240219232908.png" />

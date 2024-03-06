@@ -1,20 +1,104 @@
-﻿Написанная утилита должна вытаскивать картинки и текст из бинарных документов.
-Контекст: только opensource с лицензией аля apache 2.0, поскольку продукт коммерческий и лицензии дорогие, забугорные. Работать должна на linux системах.
-# 1 До
+﻿# 1 
+Рассмотрим детальнее утилиту для импорта текста и изображений из старых форматов.
+
 ```cs
-public static bool ExtractFromDOCX(string binaryDocFilePath,string newDirectoryForResult)
+		private const string RESULT_DOCX_FILENAME_AND_EXTENSION = "Result.docx";
+        private const string DOCX_MEDIA_PATH = "word/media/";
+        private const string EXTRACTED_TEXT_RESULT_FILENAME_AND_EXTENSION = "Result.txt";
+        private const string EXTRACT_RESULT_PATH = "Files";
+
+        static void Main(string[] args)
         {
+            if (args.Length == 0)
+            {
+                Console.WriteLine("args is null");
+                Console.Read();
+                return;
+            }
+            if (!FileManager.FileIsExistFromStartUpArguments(args, out string filePath))
+            {
+                Console.WriteLine("File path not found.");
+                Console.Read();
+                return;
+            }
+            if (!FileManager.GetOpenFileCommandByExtension(Path.GetExtension(filePath), out Extension supportedExtension))
+            {
+                Console.WriteLine("Extension was not supported");
+                Console.Read();
+                return;
+            }
+
+            // Debug
+            Console.Read();
+            
+			// 1
+            var workingPath = Directory.GetCurrentDirectory();
+			// 1
+            var newDirectory = Path.Combine(workingPath, EXTRACT_RESULT_PATH);
+
+			// 2
+            if (!Directory.Exists(newDirectory))
+            {
+                DirectoryInfo directoryInfo = Directory.CreateDirectory(newDirectory);
+                directoryInfo.Create();
+
+                // https://stackoverflow.com/questions/8821410/why-is-access-to-the-path-denied
+                File.SetAttributes(newDirectory, FileAttributes.Normal);
+            }
+            else
+            {
+                DirectoryInfo di = Directory.CreateDirectory(newDirectory);
+                File.SetAttributes(newDirectory, FileAttributes.Normal);
+                di.Delete(true);
+                di.Create();
+                File.SetAttributes(newDirectory, FileAttributes.Normal);
+            }
+
+            switch (supportedExtension)
+            {
+                case OtherExtension _:
+                    break;
+                case DocExtension _:
+                    ExtractFromDOCX(filePath, newDirectory);
+                    break;
+                case XlsExtension _:
+                    ExtractFromXLS(filePath, newDirectory);
+                    break;
+                default:
+                    break;
+            }
+        }
+```
+
+# 1
+Семантически этот код говорит нам что будущие результаты(изображения,текст...) будет храниться в специальной папке, расположенной там где и сам исполняемый файл.
+# 2
+Этот блок кода отвечает за сброс результатов предыдущей работы программы.
+
+___
+
+```cs
+public static bool ExtractFromDOCX(string binaryDocFilePath, string newDirectoryForResult)
+        {
+            Console.WriteLine("Extracting from DOCX file...");
+
             var ConverterDocToDocx = new ConverterToXml.Converters.DocToDocx();
+
             string convertedDocxFilePath = Path.Combine(newDirectoryForResult, RESULT_DOCX_FILENAME_AND_EXTENSION);
-            ConverterDocToDocx.ConvertFromFileToDocxFile(binaryDocFilePath,convertedDocxFilePath);
+
+            ConverterDocToDocx.ConvertFromFileToDocxFile(binaryDocFilePath, convertedDocxFilePath);
+
             if (!File.Exists(convertedDocxFilePath))
             {
                 return false;
             }
+
             var listOfExtractedImages = new List<MagickImage>();
+
+			// 3
             try
             {
-                using (var documentArchive = new System.IO.Compression.ZipArchive(new FileStream(convertedDocxFilePath , FileMode.Open)))
+                using (var documentArchive = new System.IO.Compression.ZipArchive(new FileStream(convertedDocxFilePath, FileMode.Open)))
                 {
                     foreach (System.IO.Compression.ZipArchiveEntry entry in documentArchive.Entries)
                     {
@@ -25,7 +109,7 @@ public static bool ExtractFromDOCX(string binaryDocFilePath,string newDirectoryF
                                 var imageFromStream = new MagickImage(entry.Open());
                                 listOfExtractedImages.Add(imageFromStream);
                             }
-                            catch (System.Exception exception)
+                            catch (Exception exception)
                             {
                                 Console.WriteLine(exception);
                             }
@@ -37,163 +121,179 @@ public static bool ExtractFromDOCX(string binaryDocFilePath,string newDirectoryF
             {
                 Console.WriteLine(exception);
             }
+
             foreach (var extractedMagickImage in listOfExtractedImages)
             {
                 string imagePath = Path.Combine(newDirectoryForResult, extractedMagickImage.FileName);
+
                 extractedMagickImage.Write(imagePath);
             }
+
+			// 4
             var converterDocx2Xml = new DocxToXml();
+
             var innerTextFromDocx = converterDocx2Xml.ConvertByFile(convertedDocxFilePath);
+
             using (var writer = new StreamWriter(Path.Combine(newDirectoryForResult, EXTRACTED_TEXT_RESULT_FILENAME_AND_EXTENSION), true))
             {
                 writer.Write(innerTextFromDocx);
             }
+
             return true;
         }
 ```
-Код раздут, здесь логика и конвертирования, и вытаскивания картинок и текста, так же нейминг метода хромает, будто просто распаковка docx файла.
+# 3
+Попытка распаковать документ, проход по файлам из `/media`, попытка обработать изображение(да, на redos/ubuntu да и в принципе в Linux [формат emf не обрабатывается](https://imagemagick.org/script/formats.php)... все это городит конструкцию одной из важных целей метода - вытаскивание изображений.
+# 4 
+Казалось бы, вроде перевели doc - docx, зачем еще?
+Вытащить текст из xml с помощью b2xtranslator намного проще и качественнее...
 
-После уже подразумевает адаптацию под библиотеку, а не под утилиту, вертеться будет на сервере, следовательно сохранять в файл не имеет смысла, работаем только с потоком, в качестве результата будет не булева(успех), а объект класса ExtractResult, который включает в себя текст, ошибка при вытаскивании текста, список (ошибок-имя изображения) при вытаскивании изображений(для сбора статистики, сами исключения мы будем добавлять в логгер непосредственно в методе, вызывающем пример выше из библиотеки) и сам список изображений, таким образом мы можем расширить класс ExtractResult, добавив два поля например метаданные файла, и ошибка при вытаскивании метаданных.
-
-Выделим в локальные методы, которые говорят сами за себя
-# После
-
+# 5
 ```cs
-public static ExtractResult GetTextAndImagesFromDoc(Stream docStream)
+public static bool ExtractFromXLS(string path, string newFilePath)
         {
-            MemoryStream docxStream = ConvertDocStream(docStream);
-
+            Console.WriteLine("Extracting from xls file...");
+            string curDir = Path.GetDirectoryName(path);
             ExtractResult result = new ExtractResult();
+			// 5
+            using FileStream file = new FileStream(path, FileMode.Open, FileAccess.Read);
+            HSSFWorkbook workbook = new HSSFWorkbook(file);
 
-            ExtractImagesFromDOCX(docxStream, result);
-            ExtractTextFromDOCX(docxStream, result);
-            //...
-            return result;
-        }
-```
-Не нужно беспокоиться о зависимых переменных(местоположение нового файла) во время 
-# 2 До
-Допустим у нас есть три метода возможной конвертации из doc в docx 
-1 - преобразование из пути исходного файла в путь к новому файлу
-2 - получить поток преобразованного файла из пути исходного
-3 - получить конвертированный поток из потока исходного файла   
-
-Глупым способом будет реализация(копирования) логики для каждого метода.
-
-# После
-используем логику поток-поток как основную, для того чтобы методы поток-файл и файл-файл использовали ее.
-
-```cs
-public void ConvertFromFileToDocxFile(string docPath, string docxPath)
-        {
-            using (FileStream fs = new FileStream(docPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            for (int i = 0; i < workbook.NumberOfSheets; i++)
             {
-                MemoryStream docxMemoryStream = ConvertFromStreamToDocxMemoryStream(fs);
-                using (FileStream docxFileStream = new FileStream(docxPath, FileMode.OpenOrCreate))
+                ISheet sheet = workbook.GetSheetAt(i);
+
+                HSSFPatriarch patriarch = (HSSFPatriarch)sheet.DrawingPatriarch;
+
+                if (patriarch.CountOfAllChildren == 0)
                 {
-                    docxFileStream.Write(docxMemoryStream.ToArray());
+                    continue;
+                }
+
+                for (int j = 0; j < patriarch.Children.Count; j++)
+                {
+                    HSSFPicture picture = null;
+                    // 5
+                    try
+                    {
+                        picture = (HSSFPicture)patriarch.Children[j];
+                    }
+                    catch (Exception)
+                    {
+                        // дети вытаскиваются не только картинками но и формами.
+                        continue;
+                    }
+                    try
+                    {
+                        var imageFromBytes = new MagickImage(picture.PictureData.Data);
+                        result.ImageItems.Add(
+                                       new ImageItem()
+                                       {
+                                           Name = picture.FileName,
+                                           Image = imageFromBytes
+                                       });
+                    }
+                    catch (Exception exception)
+                    {
+                        result.Errors.Add(
+                           new ExtractError()
+                           {
+                               File = picture.FileName,
+                               Error = exception.Message
+                           });
+                    }
                 }
             }
-        }
-        public MemoryStream ConvertFromFileToDocxMemoryStream(string docPath)
-        {
-            using (FileStream fs = new FileStream(docPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+
+            for (int count = 0; count < result.ImageItems.Count; count++)
             {
-                return ConvertFromStreamToDocxMemoryStream(fs);
+                ImageItem imageItem = result.ImageItems[count];
+                try
+                {
+                    string imagePath = Path.Combine(newFilePath, String.IsNullOrEmpty(imageItem.Name)
+                        ? count.ToString() + "." + imageItem.Image.Format
+                        : imageItem.Name + "." + imageItem.Image.Format);
+
+                    imageItem.Image.Write(imagePath);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(ex);
+                    continue;
+                }
             }
-        }
-        public MemoryStream ConvertFromStreamToDocxMemoryStream(Stream stream)
-        {
-            StructuredStorageReader reader = new StructuredStorageReader(stream);
-            WordDocument doc = new WordDocument(reader);
-            var docx = WordprocessingDocument.Create("docx", DocumentType.Document);
-            Converter.Convert(doc, docx);
-            return new MemoryStream(docx.CloseWithoutSavingFile());
-        }
-```
-# 3 До
-В проекте была огромная логика не только проверки на существование полей сообщения, но и для особенных случаев по разным видам события.
-```cs
-        private void SendEventMessageToServer(ClientEvent eventMessage)
-        {
-	        // Check eventMessage for incorrect values...
-	        
-            // если документ переименовали, (или перетащили?)то переименуем перед отправкой.
-            if (eventMessage.DocEvent.Equals(enumEventType.DocIsRenamed) || eventMessage.DocEvent.Equals(enumEventType.DocIsMoved))
+
+            var allText = new StringBuilder();
+
+            using FileStream textFile = new FileStream($"Extracted text.txt", FileMode.Create, FileAccess.Write);
+
+            for (int sheetIndex = 0; sheetIndex < workbook.NumberOfSheets; sheetIndex++)
             {
-                eventMessage.FileName = eventMessage.CloningFileName;
+                ISheet sheet = workbook.GetSheetAt(sheetIndex);
+
+                for (int rowIndex = 0; rowIndex <= sheet.LastRowNum; rowIndex++)
+                {
+                    IRow row = sheet.GetRow(rowIndex);
+                    if (row == null) continue;
+
+                    for (int cellIndex = 0; cellIndex < row.LastCellNum; cellIndex++)
+                    {
+                        ICell cell = row.GetCell(cellIndex);
+                        if (cell == null) continue;
+
+                        string cellValue = cell.ToString() + " "; // This gets the text value of the cell
+                                                                  // Process the cell value as needed
+                                                                  //allText.Append(cellValue + " ");
+                        allText.Append(cellValue);
+                    }
+                }
             }
-			if (eventMessage.DocEvent.Equals(enumEventType.DocIsDeleted))
+            textFile.Write(new UTF8Encoding(true).GetBytes(allText.ToString()));
+
+            using (StreamWriter writer = new StreamWriter(Path.Combine(curDir, "Files", "Result.txt"), true))
             {
-                // Some logic
+                writer.Write(allText);
             }
-            if (eventMessage.DocEvent.Equals(enumEventType.DocIsCopied))
-            {
-                // Some logic
-            }
-            //...
-            // SendMessage...
+
+            return true;
         }
 ```
 
-# 3 После
-Решением будет ad hoc полиморфизм, создадим подклассы ClientEvent, где имя типа будет характеризовать события над файлом
+Вытаскивание текста и изображений сами по себе автономны, однако сам метод возвращает результат в виде класса
 ```cs
-private void SendEventMessageToServer(ClientCopiedEvent eventMessage)
+/// <summary>
+    /// The result of the extraction
+    /// </summary>
+    public class ExtractResult
+    {
+        /// <summary>
+        /// File name which was investigated
+        /// </summary>
+        public string File { get; set; }
+        /// <summary>
+        /// Image items found
+        /// </summary>
+        public System.Collections.Generic.List<ImageItem> ImageItems { get; private set; }
+        /// <summary>
+        /// Errors encountered
+        /// </summary>
+        public System.Collections.Generic.List<ExtractError> Errors { get; private set; }
+
+        /// <summary>
+        /// Default constructor
+        /// </summary>
+        public ExtractResult()
         {
-			// Check eventMessage for incorrect values...
-			// OtherLogic();
-			// SendMessage...
-		}
-
-private void SendEventMessageToServer(ClientRemovedEvent eventMessage)
-        {
-			// Check eventMessage for incorrect values...
-			// OtherLogic();
-			// SendMessage...
-		}
-
-private void SendEventMessageToServer(ClientMovedEvent eventMessage)
-        {
-			// Check eventMessage for incorrect values...
-			// OtherLogic();
-			// SendMessage...
-		}
-private void SendEventMessageToServer(ClientCreateEvent eventMessage)
-        {
-			// Check eventMessage for incorrect values...
-			// OtherLogic();
-			// SendMessage...
-		}
-		//...
+            this.ImageItems = new System.Collections.Generic.List<ImageItem>();
+            this.Errors = new System.Collections.Generic.List<ExtractError>();
+        }
+    }
 ```
 
-Таким образом нам не нужно будет городить большое количество условий(событий может быть не 10 а более ) для специфичных значений поля перечисления.
+именно семантика глобального метода, тип результата и оптимизация сложности(не надо будет дважды конвертировать файл в HSSFWorkbook) связывают эти два подметода.
 
-# 4 WinApi
-Буквально в последнем своем [посте](https://matkarimovalexander.github.io/2024/02/25/Writing-An-Active-Window-Hook.html) я использовал подобный метод.
-```cs
-[DllImport("user32.dll")]
-    public static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr hmodWinEventProc, WinEventDelegate lpfnWinEventProc, uint idProcess, uint idThread, uint dwFlags);
-```
-Там как раз указаны какие значения для полей я использовал отталкиваясь от предыдущих.
+# Итог
+Да, есть короткие автономные функции, да есть довольно громоздкие(которые можно выделить в локальный метод, вопрос лишь в связанных переменных), однако из этих маленьких строительных блоков строится блок побольше, цель которого можно понять только(не смотря на имя метода и его комментарий) из композиций меньших.
 
-Решением будет разбиение метода SetWinEventHook на более узкие
-
-Сможем убрать случай когда idProcess и idThread равны 0
-```cs
-public static extern IntPtr SetWinEventHookFromAllProcessesAndThreads(uint eventMin, uint eventMax, IntPtr hmodWinEventProc, WinEventDelegate lpfnWinEventProc, uint dwFlags);
-```
-Избавились от IntPtr hmodWinEventProc поскольку работаем вне контекста
-```cs
-[DllImport("user32.dll")]
-    public static extern IntPtr SetWinEventHookOutOfContext(uint eventMin, uint eventMax, WinEventDelegate lpfnWinEventProc, uint idProcess, uint idThread, uint dwFlags);
-```
-Избавились от uint eventMin, uint eventMax, выделив случай для EVENT_SYSTEM_FOREGROUND = 3
-```cs
-[DllImport("user32.dll")]
-    public static extern IntPtr SetWinEventHookActiveWindowIsChanged( WinEventDelegate lpfnWinEventProc, uint idProcess, uint idThread, uint dwFlags);
-```
-итд...
-
-Итогом будет то что не стоит городить супер-метод, он, подобно опухоли, может разрастаться новой логикой для определенного значения или комбозначений, создавая невидимую сложность для разработчика, повышая сложность понимания самого метода в разы.
+Нот всего 7, замедли [It's Your Move Diana Ross](https://www.youtube.com/watch?v=vtlgWW8L8f4) и из жанра Synth-pop зародится [vaporwave](https://www.youtube.com/watch?v=aQkPcPqTq4M)
+Букв 33.

@@ -39,6 +39,7 @@
   <ItemGroup>
     <Content Include="Images\20240219232908.png" />
     <Content Include="Images\Pasted image 20240220001357.png" />
+    <Content Include="Images\Pasted image 20240324220619.png" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

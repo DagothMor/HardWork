@@ -1,116 +1,21 @@
-﻿Допустим у нас есть класс Quest, и спустя время мы решили добавить в нашу игру зачарованное оружие(амулет итд...), которое использует заряды, они же в свою очередь восстанавливаются только душами умерших врагов(можно добавить еще что при попытке захватить душу герой временно переносится в иное измерение и сражается с сущностями-конкуррентами) после выполнения какого либо квеста. Проблема в том что ни счетчик душ, ни булеву Согласен_На_Пополнение_Душ в класс квест не реализуешь. Здесь напрашивается паттерн реестр. В качестве централизованного реестра будем использовать SoulCollector.
+﻿
+# 2
+## 2.1
+Работа с документами, основанными на xml формате(docx,pptx,xlsx), реализация одинакова, допустим openxml, однако при будущем расширении логики(вытаскивать картинки из разархивированного файла) потребуются немного иные подходы(константа на путь, пропуск форм итд)
 
-```cs
-namespace FlyWeight
-{
-    using System;
-    class Program
-    {
-        static void Main(string[] args)
-        {
-            Console.WriteLine("Герой, готовы ли вы начать квест? (да/нет)");
-            var response = Console.ReadLine();
-            if (response?.ToLower() != "да")
-            {
-                Console.WriteLine("Квест отменен.");
-                return;
-            }
-            Console.WriteLine("Хотите ли вы собирать души для меча во время квеста? (да/нет)");
-            response = Console.ReadLine();
-            bool collectSouls = response?.ToLower() == "да";
-            Sword sword = new Sword();
-            Hero hero = new Hero(sword);
-            Quest quest = new Quest("Поход против гоблинов", "Уничтожьте гоблинов в лесу");
-            if(collectSouls) SoulCollector.Instance.RegisterQuest(quest);
-            // Представление убийства гоблинов и сбора душ
-            for (int i = 0; i < 3; i++)
-            {
-                Console.WriteLine($"Гоблин {i + 1} убит.");
-                SoulCollector.Instance.CollectSoul(quest);
-            }
-            
-            // Завершение квеста и пополнение меча
-            hero.CompleteQuest(quest);
-            
-            Console.WriteLine($"Квест завершен. Зарядов в мече: {sword.Charges}");
-        }
-    }
+## 2.2
+Одинаковая реализация допустим создание новых классов юнитов в старкрафте, разницы между зилотом и темпларом маленькая, оба - пехотинцы с ближним боем, однако наличие невидимости и способность объединяться в темного архона у темплара, задает иную спецификацию(интересно сколько хп будет у архона если объеденить два полумертвых темплара) 
 
-    public class Hero
-    {
-        public Sword Sword { get; }
+## 2.3
+Жидкость в Noita.
+Симуляция воды, нефти, крови, радиации, болота... абсолютно идентичная, однако текучесть, последствия выпитого(вампиризм, нефть-кровь...), смешивание жидкости(акселератиум+левиталиум=hastium,лава + вода = вулканический камень, лава + радиоактивная вода = радиоактивный камень...) да и что нам мешает в будущем объеденить левиталиум+ и любую жидкость и указать логику что теперь жидкость будет течь вверх?
+## 2.4 Итог
+Нельзя смотреть на разрабатываемую логику как здесь и сейчас, взглянув на его спецификацию мы можем догадаться что далеко впереди этот объект станет совсем другим по сравнению с его текущими "близнецами".
+# 3
+Нет, поскольку метод ExtractPNGFromRawFile переоформился не только для вытаскивания картинок из pptx файла. Более абстрактное название(как и сама функциональность) это ExtractBitArrayByPattern.
 
-        public Hero(Sword sword)
-        {
-            Sword = sword;
-        }
-
-        public void CompleteQuest(Quest quest)
-        {
-            var soulsCollected = SoulCollector.Instance.GetSoulsCollected(quest);
-            Sword.Recharge(soulsCollected);
-        }
-    }
-
-    public class Sword
-    {
-        public int Charges { get; private set; } = 0;
-
-        public void Recharge(int souls)
-        {
-            Charges += souls;
-            Console.WriteLine($"{souls} душ(и) перенесено в меч.");
-        }
-    }
-
-    public class Quest
-    {
-        public string Title { get; }
-        public string Description { get; }
-        // Уникальный идентификатор квеста для использования в качестве ключа
-        public Guid Id { get; }
-
-        public Quest(string title, string description)
-        {
-            Title = title;
-            Description = description;
-            Id = Guid.NewGuid(); // Генерируем уникальный ID для каждого квеста
-        }
-    }
-
-    // Класс-одиночка для управления сбором душ
-    public class SoulCollector
-    {
-        private static readonly Lazy<SoulCollector> _instance = new Lazy<SoulCollector>(() => new SoulCollector());
-        public static SoulCollector Instance => _instance.Value;
-        private readonly Dictionary<Guid, int> _soulsCollected = new Dictionary<Guid, int>();
-        private SoulCollector() { }
-        public void RegisterQuest(Quest quest)
-        {
-            if (!_soulsCollected.ContainsKey(quest.Id))
-            {
-                _soulsCollected.Add(quest.Id, 0);
-            }
-        }
-
-        public void CollectSoul(Quest quest)
-        {
-            if (_soulsCollected.ContainsKey(quest.Id))
-            {
-                _soulsCollected[quest.Id]++;
-            }
-        }
-
-        // Метод для получения количества собранных душ после завершения квеста
-        public int GetSoulsCollected(Quest quest)
-        {
-            if (_soulsCollected.TryGetValue(quest.Id, out var count))
-            {
-                return count;
-            }
-            return 0;
-        }
-    }
-}
-```
-Ой решили добавить в честь китайского нового года босса дракона для ЕЖЕ квестов, ой в честь пасхи нужно добавить возможность согласиться на поиск пасхальных яиц... Проблему конечно мы решили, но этот костыль лишь сигнал о том что придут следующие, а эти сигналы являются явным сигналом о слабости абстракций, которые были спроектированы. Интересен еще момент что после нашей реализации, как это описывать в спецификации, и как ее расширять дальше если потребуется, сложность вырастает в разы.
+# 4
+раз в минут 10-15,порой сразу же, поскольку в проекте отсутствует спецификация.
+Во первых это чтобы весь проект был реализован на 1 языке, а не c# микросервис, который взаимодействует с микросервисами на пайтоне.
+Во вторых это чистый код, чтобы он читался повествовательно.
+В третьих чтобы логика была атомарной.

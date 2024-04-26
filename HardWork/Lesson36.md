@@ -1,89 +1,303 @@
-﻿
-# 2
-Большая часть методов и неймингов расплывчата по понятным ПРИЧИндаМ.
-## 2.1 interface IDocument
-У нас есть Абстрактный тип данных как интерфейс IDocument, у него есть ряд методов и состояние :
+﻿# 2 
+2 примера обучающих, 1 рабочий
+## 2.1 Vehicle
+
+От Landvehicle можно избавиться, Он несет в себе лишь обобщение.
 ```cs
-// Интерфейс документа формата N с доступом на уровне файловой системы
- interface IDoc
+abstract class Vehicle
 {
-    // Является ли документ открытым
+    public string Type { get; set; }
+    public int MaxSpeed { get; set; }
+    public int SeatCount { get; set; }
 
-    // Открыть (Путь до файла) (Пароль файла) (Режим чтения)
-
-    // Сохранить
-
-    // Закрыть документ
-
-    // Получить расширение открытого документа
-
-    //Получить путь до файла
+    public abstract void Move();
 }
-```
-
-## 2.2 1 Расширение документа
-```cs
-// Интерфейс документа с работой метаданных
-public interface IDocMetadata : IDocument
+abstract class Landvehicle : Vehicle
 {
-    // CRUD для особенной метадаты
 
-    // CRUD для метадаты, с которой работает расширение для Microsoft office
 }
-```
-Реализация АТД нам теперь говорит что эта сущность обязана работать со своей метаданной
-## 2.3 2 Расширение документа
-```cs
-// получение текста и картинок
-public interface IKartinkiTextVitaskivable : IDocument
+
+class Car : Landvehicle
 {
-    // Извлечь текст
-    // Извлечь изображения
+    public Car()
+
+    public override void Move()
 }
-```
-Реализация АТД нам теперь говорит что эта сущность обязана работать со своим содержимым.
-## 2.4 
-Вдруг нам потребовалось засунуть документ в тесеракт и в зависимости от содержания текста, допустим там запись от 19 июля 2001 года, нам нужно подправить метадату создания документа.
-В идеале это должен быть единый метод, который принимает только те документы, которые могут работать и со своим контентом и со своими атрибутами на уровне файловой системы
-```cs
-// документ может быть обработан тессерактом.
-public interface IDocTesseractable : IDocMetadata, IKartinkiTextVitaskivable
+
+class Plane : Vehicle
 {
+    public Plane()
+
+    public override void Move()
+
+    public void Fly()
 }
+
+class Ship : Vehicle
+{
+    public Ship()
+
+    public override void Move()
+}
+
+class Bicycle : Vehicle
+{
+    public Bicycle()
+
+    public override void Move()
+}
+
+
 ```
 
-В итоге все что нам понадобится это
-```cs
-public bool UpdateMetadataByContent(IDocTesseractable doc)
-{
-}
-```
+# 2.2
 
-Конечно, применений для текущей абстракции масса.  
-## 2.5
+Так же можно избавиться от обобщающих классов Grocery, Entertaining, DeliveryOfProperty
 ```cs
-// Конкретная фабрика для создания объектов на основе расширения файла
-public class ConcreteFileProcessorFactory : FileProcessorFactory 
-{ 
-public override IDocTesseractable CreateFileProcessor(string fileExtension) 
-{ 
-switch (fileExtension.ToLower())
-{ case ".doc": return new DocFileProcessor();
-case ".docx": return new DocxFileProcessor();
-case ".xls": return new XlsFileProcessor();
-case ".xlsx": return new XlsxFileProcessor();
-default: throw new ArgumentException("Unsupported file");
+abstract class Business
+{
+    public string Name { get; set; }
+    public string Address { get; set; }
+    public decimal Revenue { get; set; }
+    public int EmployeeCount { get; set; }
+
+    public abstract void ServeCustomer();
+
+    public virtual void PrintInfo()
+    {
+    }
 }
-} 
+
+class Grocery : Business
+{
+
 }
+
+class Entertaining : Business
+{
+
+}
+
+class DeliveryOfProperty : Business
+{
+
+}
+
+class Restaurant : Grocery
+{
+    public override void ServeCustomer()
+    {
+    }
+
+    public override void PrintInfo()
+    {
+        base.PrintInfo();
+        Console.WriteLine("Cuisine: Italian");
+    }
+}
+
+class Shop : Grocery
+{
+    public override void ServeCustomer()
+    {
+    }
+}
+
+class Hotel : DeliveryOfProperty
+{
+    public override void ServeCustomer()
+    {
+    }
+}
+
+class Cinema : Entertaining
+{
+    public override void ServeCustomer()
+    {
+    }
+}
+
 ```
-Далее поведенческая абстракция которая описывает подготовку обработки файлов. 
 # 3
-У нас белый лист.
-Нам дается задача по автоматизации процессов.
-Мы на этом белом листе начинаем рисовать трехмерно фигуры, связи между ними и описания этих фигур(объект, действие, характеристика)(главные и второстепенные члены предложения).
-Удостоверились что все логично, проходясь по каждому абстрактному элементу учитывая косвенные связи подобно системе по ШСМ(Церенов,Левенчук,Лубенченко да простят они меня, ибо подписка есть, но не прохожу курсы т.к и так на себя много обязательств взял на данный момент.)
-У нас наконец то есть грамотная модель мира(возможно спецификация).
-По этой модели подобно тени от объекта мы пишем код.
-Код должен быть написан так, чтобы в нашей голове была не только текущая картина объекта, но и ее окружение, второстепенные объекты, в идеале, вся система.
-Я вижу Person,Employee,ContrAgent,Order,Dish,Calories,Salary,Price,BuisnessProcess,Vacation,Schedule,DishesOfTheDay... и понимаю что модель - ресторан, и я могу работать с проектом ресторан не на уровне кода, а на уровне построенное модели, в голове от кода или по спецификации и даже лучше.
+
+# 3.1
+Логично, что все самолеты перед тем как начать лететь, набирают скорость на полосе "двигаясь".
+Выделим каждое действие в обязанность летать, ездить, плавать.
+```cs
+interface ITransport
+{
+    string Type { get; set; }
+    int MaxSpeed { get; set; }
+    int SeatCount { get; set; }
+}
+
+interface IMove
+{
+    void Move();
+}
+
+interface IFly
+{
+    void Fly();
+}
+
+interface IFloat
+{
+    void Float();
+}
+
+class Car : ITransport, IMove
+{
+    public string Type { get; set; } = "Car";
+    public int MaxSpeed { get; set; } = 200;
+    public int SeatCount { get; set; } = 5;
+
+    public void Move()
+}
+
+class Plane : ITransport, IMove, IFly
+{
+    public string Type { get; set; } = "Plane";
+    public int MaxSpeed { get; set; } = 900;
+    public int SeatCount { get; set; } = 200;
+
+    public void Move()
+
+    public void Fly()
+}
+
+class Ship : ITransport, IMove,IFloat
+{
+    public string Type { get; set; } = "Ship";
+    public int MaxSpeed { get; set; } = 50;
+    public int SeatCount { get; set; } = 1000;
+
+    public void Float()
+}
+
+class Bicycle : ITransport, IMove
+{
+    public string Type { get; set; } = "Bicycle";
+    public int MaxSpeed { get; set; } = 30;
+    public int SeatCount { get; set; } = 1;
+
+    public void Move()
+}
+
+```
+# 3.2
+Бизнес это не только про обслуживание посетителей, это может быть просто производство продукта и продажа агентам.
+
+```cs
+interface IBusiness
+{
+    string Name { get; set; }
+    string Address { get; set; }
+    decimal Revenue { get; set; }
+    int EmployeeCount { get; set; }
+}
+
+interface IServeCustomer
+{
+    void ServeCustomer();
+}
+interface IProduceProduct
+{
+    void ProduceProduct();
+}
+
+class Restaurant : IBusiness, IServeCustomer
+{
+    public string Name { get; set; }
+    public string Address { get; set; }
+    public decimal Revenue { get; set; }
+    public int EmployeeCount { get; set; }
+
+    public void ServeCustomer()
+}
+
+class Shop : IBusiness, IServeCustomer
+{
+    public string Name { get; set; }
+    public string Address { get; set; }
+    public decimal Revenue { get; set; }
+    public int EmployeeCount { get; set; }
+
+    public void ServeCustomer()
+}
+
+class Hotel : IBusiness, IServeCustomer
+class Cinema : IBusiness, IServeCustomer
+
+class TextileFactory : IBusiness, IProduceProduct
+{
+    public string Name { get; set; }
+    public string Address { get; set; }
+    public decimal Revenue { get; set; }
+    public int EmployeeCount { get; set; }
+
+    public void ProduceProduct()
+}
+
+```
+# 3.3
+в зависимости от функциональности нашего приложения, мы можем через интерфейсы управлять возможностями документов старого формата, и нового
+```cs
+interface IDocument
+{
+    string Name { get; set; }
+    DateTime CreationDate { get; set; }
+}
+
+interface ICRUD
+{
+    void Create();
+    void Read();
+    void Update();
+    void Delete();
+}
+
+interface IContentExtractable
+{
+    string GetText();
+    Image GetImage();
+}
+
+class BinaryDoc : IDocument, ICRUD
+{
+    public string Name { get; set; }
+    public DateTime CreationDate { get; set; }
+
+    // crud
+}
+
+class XDoc : IDocument, ICRUD, IContentExtractable
+{
+    public string Name { get; set; }
+    public DateTime CreationDate { get; set; }
+
+    // crud
+
+    public string GetText()
+    {
+        return "XML document text";
+    }
+
+    public Image GetImage()
+    {
+        return new Bitmap("xml_document.bmp");
+    }
+}
+
+```
+
+# Итог
+Вариант с избавлением от промежуточного обобщающего класса безболезненно может показаться разумным, НО.
+Нужно отталкиваться от абстракций в рамках бизнес требования(задачи, спецификаций).
+На момент разработки, обобщающий класс документ-договор может и быть легко удален, но что если в будущем нам в рамках ЭДО нужно работать с документами не как с сущностями несущими в себе функционал Iподписываемый,Iэцп... , а как непосредственно с классами. 
+
+Для меня интерфейс это контракт, дал клятву Гиппократа - будь добр выполняй метод лечить кого угодно, теперь ты лекарь. Но не доктор, не врач, а просто лекарь. мы работает с объектом не как с врачом, а как с просто объектом, который реализует Nый функционал.
+Нужно явно разделять Абстракции и сущности с контрактами(обязанностями), перевод из одного в другое и наоборот имеет смысл только если мы грамотно составим спецификацию. Возможно, мы жестко привязываем функционал, чтобы в будущем при разработке лающие(от поведения собаки) кошки, не могли есть собачий корм. Какова вероятность в разработке, что случится с женщиной, если она весит как утка, а значит сделана из дерева(дерево плавает как и утка), а значит горит в огне, а что еще горит в огне? 
+
+Правильно.
+Ведьма.

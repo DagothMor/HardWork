@@ -1,303 +1,41 @@
-﻿# 2 
-2 примера обучающих, 1 рабочий
-## 2.1 Vehicle
+﻿### Справляемся с краевыми случаями
 
-От Landvehicle можно избавиться, Он несет в себе лишь обобщение.
-```cs
-abstract class Vehicle
-{
-    public string Type { get; set; }
-    public int MaxSpeed { get; set; }
-    public int SeatCount { get; set; }
+1. Приведите четыре примера краевых случаев в ваших проектах, которые существенно усложняли код, и по каждому расскажите, как вы с ними справлялись.
 
-    public abstract void Move();
-}
-abstract class Landvehicle : Vehicle
-{
+2. Изучите материал "43) Как справляться с краевыми случаями".  
 
-}
+Появились ли теперь у вас более сильные идеи, как лучше было обходиться с краевыми случаями?
 
-class Car : Landvehicle
-{
-    public Car()
+# 1 FileManager
+В проекте был fileManager отвечающий за открытие/закрытие файла и CRUD операции над метаданными файла.
 
-    public override void Move()
-}
+Нужно было расширить логику, ибо этот класс использовался и в отдельном приложении, который вызывается автоматом при открытии документов. Может возникнуть такая ситуация, что файл в это время может быть заблокирован другим процессом.
+Так же в операцию открытия автоматически была попытка открыть метаданные, если их не было то создавались новые и вшивались в нее. На самом деле это лишь по итогу мешало, поскольку файл при создании от утилиты и так это собирался делать.
 
-class Plane : Vehicle
-{
-    public Plane()
+По итогу переделал под конечный автомат, разделил логику на атомарные операции и добавил количество попыток открытия через N миллисекунд.
 
-    public override void Move()
+# 2 Раздутие логики создания http запроса
+После того как мы поняли что чтото с файлом произошло, в методе создания запроса мы анализировали что именно случилось с файлом, и в зависимости от видов копирования, удаление, переименования, мы меняли поля объекта, который в последствии сериализуется и отправится на сервер. Но и этим дело не кончалось, так же еще очищался/обновлялся кеш открывшихся недавно файлов, поддерживание кода усложнялось.
 
-    public void Fly()
-}
+решение было добавление фильтра перед созданием запросов и промежуточный слой, который выполнял работу непосредственно с кешем открытых документов.
 
-class Ship : Vehicle
-{
-    public Ship()
+# 3 Мастер документ
 
-    public override void Move()
-}
+Для файла было много методов и условий касаемо вытаскивания картинок и текста, так же в рамках жизни прототипа, многие методы были не реализованы и кидали исключения.
+Решением было выделением документа в АТД, наследниками были классы бинарные документы(старого формата) и современные(OpenXML), сам ряд методов по работе с вытаскиванием картинок и текста , а так же CRUD операции с метаданными были выделены в отдельные интерфейсы и комбоинтерфейс, для удобства работы.
 
-class Bicycle : Vehicle
-{
-    public Bicycle()
+# 4 Отмена или продолжить
+Есть очень долгая операция проходящая по всему проводнику и работающая с какими то файлами(работа с ними очень нагруженная)
+Есть расписание которое настраивается пользователем и в следствии созданного расписания выполняется операция выше.
+Проблема заключалась в том что добавилась задача на продолжение операции имела бизнес ошибку, зачем продолжать проходится по проводнику и работать с файлами, если спустя время, те места где мы работали могли обновится и иметь новые файлы/измененные?
 
-    public override void Move()
-}
+Здесь решение было простым, до начала разработки, отказ от остановки процесса, операцию прохода прерываем навсегда и таким образом если пользователь решит продолжить, то на самом деле операция стартует с самого начала.
 
 
-```
-
-# 2.2
-
-Так же можно избавиться от обобщающих классов Grocery, Entertaining, DeliveryOfProperty
-```cs
-abstract class Business
-{
-    public string Name { get; set; }
-    public string Address { get; set; }
-    public decimal Revenue { get; set; }
-    public int EmployeeCount { get; set; }
-
-    public abstract void ServeCustomer();
-
-    public virtual void PrintInfo()
-    {
-    }
-}
-
-class Grocery : Business
-{
-
-}
-
-class Entertaining : Business
-{
-
-}
-
-class DeliveryOfProperty : Business
-{
-
-}
-
-class Restaurant : Grocery
-{
-    public override void ServeCustomer()
-    {
-    }
-
-    public override void PrintInfo()
-    {
-        base.PrintInfo();
-        Console.WriteLine("Cuisine: Italian");
-    }
-}
-
-class Shop : Grocery
-{
-    public override void ServeCustomer()
-    {
-    }
-}
-
-class Hotel : DeliveryOfProperty
-{
-    public override void ServeCustomer()
-    {
-    }
-}
-
-class Cinema : Entertaining
-{
-    public override void ServeCustomer()
-    {
-    }
-}
-
-```
-# 3
-
-# 3.1
-Логично, что все самолеты перед тем как начать лететь, набирают скорость на полосе "двигаясь".
-Выделим каждое действие в обязанность летать, ездить, плавать.
-```cs
-interface ITransport
-{
-    string Type { get; set; }
-    int MaxSpeed { get; set; }
-    int SeatCount { get; set; }
-}
-
-interface IMove
-{
-    void Move();
-}
-
-interface IFly
-{
-    void Fly();
-}
-
-interface IFloat
-{
-    void Float();
-}
-
-class Car : ITransport, IMove
-{
-    public string Type { get; set; } = "Car";
-    public int MaxSpeed { get; set; } = 200;
-    public int SeatCount { get; set; } = 5;
-
-    public void Move()
-}
-
-class Plane : ITransport, IMove, IFly
-{
-    public string Type { get; set; } = "Plane";
-    public int MaxSpeed { get; set; } = 900;
-    public int SeatCount { get; set; } = 200;
-
-    public void Move()
-
-    public void Fly()
-}
-
-class Ship : ITransport, IMove,IFloat
-{
-    public string Type { get; set; } = "Ship";
-    public int MaxSpeed { get; set; } = 50;
-    public int SeatCount { get; set; } = 1000;
-
-    public void Float()
-}
-
-class Bicycle : ITransport, IMove
-{
-    public string Type { get; set; } = "Bicycle";
-    public int MaxSpeed { get; set; } = 30;
-    public int SeatCount { get; set; } = 1;
-
-    public void Move()
-}
-
-```
-# 3.2
-Бизнес это не только про обслуживание посетителей, это может быть просто производство продукта и продажа агентам.
-
-```cs
-interface IBusiness
-{
-    string Name { get; set; }
-    string Address { get; set; }
-    decimal Revenue { get; set; }
-    int EmployeeCount { get; set; }
-}
-
-interface IServeCustomer
-{
-    void ServeCustomer();
-}
-interface IProduceProduct
-{
-    void ProduceProduct();
-}
-
-class Restaurant : IBusiness, IServeCustomer
-{
-    public string Name { get; set; }
-    public string Address { get; set; }
-    public decimal Revenue { get; set; }
-    public int EmployeeCount { get; set; }
-
-    public void ServeCustomer()
-}
-
-class Shop : IBusiness, IServeCustomer
-{
-    public string Name { get; set; }
-    public string Address { get; set; }
-    public decimal Revenue { get; set; }
-    public int EmployeeCount { get; set; }
-
-    public void ServeCustomer()
-}
-
-class Hotel : IBusiness, IServeCustomer
-class Cinema : IBusiness, IServeCustomer
-
-class TextileFactory : IBusiness, IProduceProduct
-{
-    public string Name { get; set; }
-    public string Address { get; set; }
-    public decimal Revenue { get; set; }
-    public int EmployeeCount { get; set; }
-
-    public void ProduceProduct()
-}
-
-```
-# 3.3
-в зависимости от функциональности нашего приложения, мы можем через интерфейсы управлять возможностями документов старого формата, и нового
-```cs
-interface IDocument
-{
-    string Name { get; set; }
-    DateTime CreationDate { get; set; }
-}
-
-interface ICRUD
-{
-    void Create();
-    void Read();
-    void Update();
-    void Delete();
-}
-
-interface IContentExtractable
-{
-    string GetText();
-    Image GetImage();
-}
-
-class BinaryDoc : IDocument, ICRUD
-{
-    public string Name { get; set; }
-    public DateTime CreationDate { get; set; }
-
-    // crud
-}
-
-class XDoc : IDocument, ICRUD, IContentExtractable
-{
-    public string Name { get; set; }
-    public DateTime CreationDate { get; set; }
-
-    // crud
-
-    public string GetText()
-    {
-        return "XML document text";
-    }
-
-    public Image GetImage()
-    {
-        return new Bitmap("xml_document.bmp");
-    }
-}
-
-```
-
+# После прочтения
+решение с FileManager было правильным, решил что не стоило усложнять код, выделяя общую базу открытых документов в приложении являющимся службой Windows и добавляя дополнительное общение-проверку открытых файлов между этой службой и кроткосрочными процессами. Добавление попыток через Nое количество времени прекрасно справляется.
+Заранее отказавшись от продолжения обхода в "Отмена или продолжить" мы избегаем и ошибок в бизнес логики и в возможной запутанности кода.
+примеры 2 и 3 чтото у меня пошли мимо...
 # Итог
-Вариант с избавлением от промежуточного обобщающего класса безболезненно может показаться разумным, НО.
-Нужно отталкиваться от абстракций в рамках бизнес требования(задачи, спецификаций).
-На момент разработки, обобщающий класс документ-договор может и быть легко удален, но что если в будущем нам в рамках ЭДО нужно работать с документами не как с сущностями несущими в себе функционал Iподписываемый,Iэцп... , а как непосредственно с классами. 
-
-Для меня интерфейс это контракт, дал клятву Гиппократа - будь добр выполняй метод лечить кого угодно, теперь ты лекарь. Но не доктор, не врач, а просто лекарь. мы работает с объектом не как с врачом, а как с просто объектом, который реализует Nый функционал.
-Нужно явно разделять Абстракции и сущности с контрактами(обязанностями), перевод из одного в другое и наоборот имеет смысл только если мы грамотно составим спецификацию. Возможно, мы жестко привязываем функционал, чтобы в будущем при разработке лающие(от поведения собаки) кошки, не могли есть собачий корм. Какова вероятность в разработке, что случится с женщиной, если она весит как утка, а значит сделана из дерева(дерево плавает как и утка), а значит горит в огне, а что еще горит в огне? 
-
-Правильно.
-Ведьма.
+Нужно выделять не только АТД для модели мира, но и специфичный АТД для хаоса, как программа должна себя вести при узких и особенных ситуациях.
+Нужно соблюдать не баланс 50% на 50%, а скорее 99% и 1%. Ведь с ростом функциональности приложения будут расти и краевые случаи, тогда и нужно понимать/чувствовать/видеть, что баланс может быть нарушен между правильной абстракцией и ее хаосом, и в таком случае уже пора поднимать абстракцию отталкиваясь от накопившегося хаоса.

@@ -1,110 +1,160 @@
-﻿
-Тесты зависимы от спецификаций.
-Можно помещать продукты как во вкусвиле.
-Добавляешь продукты в корзину, применяешь купон, и только в этот момент(до оплаты) начинается проверка на наличие товаров на складе(500 рублей скидка на заказ от 3000р, может же быть такое что 1 продукт из за банального отсутсвия на складе), далее 
-Или же происходит оплата товара в озоне, и только потом начинается процесс оформления(товар в Китае, логистика итд итп)
-# 1. Добавление товара в корзину, когда товар есть в наличии на складе:
-```csharp
-[Fact]
-public void AddItemToCartWhenItemIsInStockIncreasesCartTotal()
-{
-    var inventory = new Inventory();
-    var item = new Item { Id = 1, Name = "Item 1", Price = 100, QuantityInStock = 10 };
-    inventory.AddItem(item);
-    var cart = new Cart(inventory);
-    cart.AddItem(item.Id);
-    Assert.Single(cart.Items);
-    Assert.Equal(item.Id, cart.Items[0].ItemId);
-    Assert.Equal(item.Price, cart.Items[0].Price);
-    Assert.Equal(1, cart.Items[0].Quantity);
-    Assert.Equal(item.Price, cart.TotalPrice);
-}
-```
-# 2. Когда товара нет в наличии на складе:
-```csharp
-[Fact]
-public void AddItemToCartWhenItemIsOutOfStockThrowsException()
-{
-    var inventory = new Inventory();
-    var item = new Item { Id = 1, Name = "Item 1", Price = 100, QuantityInStock = 0 };
-    inventory.AddItem(item);
-    var cart = new Cart(inventory);
-    Assert.Throws<InvalidOperationException>(() => cart.AddItem(item.Id));
-}
-```
-# 3. Добавление нескольких товаров в корзину, находящихся на складе:
-```csharp
-[Fact]
-public void AddMultipleItemsToCartWhenItemsAreInStockIncreasesCartTotal()
-{
-    var inventory = new Inventory();
-    var item1 = new Item { Id = 1, Name = "Item 1", Price = 100, QuantityInStock = 10 };
-    var item2 = new Item { Id = 2, Name = "Item 2", Price = 200, QuantityInStock = 5 };
-    inventory.AddItem(item1);
-    inventory.AddItem(item2);
-    var cart = new Cart(inventory);
-    cart.AddItem(item1.Id);
-    cart.AddItem(item2.Id);
-    Assert.Equal(2, cart.Items.Count);
-    Assert.Equal(item1.Price + item2.Price, cart.TotalPrice);
-}
-```
-# 4. Удаление товара из корзины, когда товар есть в наличии на складе:
-```csharp
-[Fact]
-public void RemoveItemFromCart_WhenItemIsInStock_DecreasesCartTotal()
-{
-    var inventory = new Inventory();
-    var item = new Item 
-    { 
-      Id = 1,
-      Name = "Item 1",
-      Price = 100,
-      QuantityInStock = 10
-    };
-    inventory.AddItem(item);
+﻿Задали хорошую задачу на собеседовании:
 
-    var cart = new Cart(inventory);
-    cart.AddItem(item.Id);
-    cart.RemoveItem(item.Id);
-    Assert.Empty(cart.Items);
-    Assert.Equal(0, cart.TotalPrice);
-}
-```
-# 5. Применение скидки к корзине, когда все товары есть в наличии на складе:
-```csharp
-[Fact]
-public void ApplyDiscountToCartWhenAllItemsAreInStockDecreasesCartTotal()
+Вот оригинальный класс `CalendarService`, который определяет, является ли текущий день рабочим:
+
+```cs
+public class CalendarService
 {
-    var inventory = new Inventory();
-    var item1 = new Item 
-    { 
-     Id = 1,
-     Name = "Item 1",
-     Price = 100,
-     QuantityInStock = 10
-    };
-    var item2 = new Item 
-    { 
-      Id = 2,
-      Name = "Item 2",
-      Price = 200,
-      QuantityInStock = 5
-        };
-    inventory.AddItem(item1);
-    inventory.AddItem(item2);
-    var cart = new Cart(inventory);
-    cart.AddItem(item1.Id);
-    cart.AddItem(item2.Id);
-    var discount = new Discount 
-    { 
-    Code = "гуид",
-     Amount = 10 
-    };
-    cart.ApplyDiscount(discount);
-    Assert.Equal(290, cart.TotalPrice);
+    public bool IsWorkingDay()
+    {
+        switch (DateTime.Now.DayOfWeek)
+        {
+            case DayOfWeek.Saturday:
+            case DayOfWeek.Sunday:
+                return false;
+            default:
+                return true;
+        }
+    }
 }
 ```
 
-Особо практики как таковой не было, поскольку за мои 3 года работы тесты никогда не писались, или тестированием занимались аналитики, или сами разрабы(поднимали вм и мониторили сценарии обработки сообщений от драйвера файловой системы)/
-надеюсь что на новой работе мне дадут побольше подобных задач.
+Также у нас есть тест для этого класса:
+
+```cs
+public class CalendarServiceTests
+{
+    [Fact]
+    public void IsWorkingDay_Always_ReturnsTrue()
+    {
+        var calendarService = new CalendarService();
+        
+        var actualDay = calendarService.IsWorkingDay();
+        
+        Assert.True(actualDay);
+    }
+}
+```
+
+Потому в CICD бага такая, что в выходные тест падает, очевидно, а в выходные должен билдится и накатывается прод. Потому нужно найти решение.
+
+А решение такое что нужно создать интерфейс `IDateTimeProvider`, который будет предоставлять текущую дату и время. Затем создать реализацию этого интерфейса и зарегистрировать их в контейнере зависимостей. В тестах теперь мы сможем замокать этот интерфейс, чтобы контролировать возвращаемые значения.
+
+```cs
+public interface IDateTimeProvider
+{
+    DateTime GetNow();
+}
+```
+
+```cs
+public class DateTimeProvider : IDateTimeProvider
+{
+    public DateTime GetNow()
+    {
+        return DateTime.Now;
+    }
+}
+```
+
+Изменим `CalendarService`, чтобы использовать зависимость через конструктор:
+
+```cs
+public class CalendarService
+{
+    private readonly IDateTimeProvider _dateTimeProvider;
+
+    public CalendarService(IDateTimeProvider dateTimeProvider)
+    {
+        _dateTimeProvider = dateTimeProvider;
+    }
+
+    public bool IsWorkingDay()
+    {
+        switch (_dateTimeProvider.GetNow().DayOfWeek)
+        {
+            case DayOfWeek.Saturday:
+            case DayOfWeek.Sunday:
+                return false;
+            default:
+                return true;
+        }
+    }
+}
+```
+
+зарегистрируем интерфейс и его реализацию:
+
+```cs
+services.AddSingleton<IDateTimeProvider, DateTimeProvider>();
+services.AddTransient<CalendarService>();
+```
+
+```cs
+public class CalendarServiceTests
+{
+    [Fact]
+    public void IsWorkingDayWeekdayReturnsTrue()
+    {
+        var mockDateTimeProvider = new Mock<IDateTimeProvider>();
+        mockDateTimeProvider.Setup(m => m.GetNow()).Returns(new DateTime(Любой рабочий день));
+        var calendarService = new CalendarService(mockDateTimeProvider.Object);
+        var actualDay = calendarService.IsWorkingDay();
+        Assert.True(actualDay);
+    }
+    
+    [Fact]
+    public void IsWorkingDayWeekendReturnsFalse()
+    {
+        var mockDateTimeProvider = new Mock<IDateTimeProvider>();
+        mockDateTimeProvider.Setup(m => m.GetNow()).Returns(new DateTime(Любой выходной));
+        var calendarService = new CalendarService(mockDateTimeProvider.Object);
+        var actualDay = calendarService.IsWorkingDay();
+        Assert.False(actualDay);
+    }
+}
+```
+
+Тут по большей части решение в DI, но моки все равно используются.
+
+Абстрактный эффект: Проверка буднего дня
+
+Явность в коде: Тест явно проверяет день, используя мок.
+
+# 2.2
+https://code-maze.com/dotnet-unit-testing-mock-file-system/
+
+```csharp
+[TestMethod]
+public void TestReadFile()
+{
+    var result = FileReader.ReadFile("test.txt");
+    Assert.AreEqual("File content", result);
+}
+```
+
+Тест зависит от содержимого файла и способа его чтения.
+
+```csharp
+using Moq;
+using System.IO.Abstractions;
+using System.IO.Abstractions.TestingHelpers;
+
+[TestMethod]
+public void TestReadFile()
+{
+    var mockFileSystem = new MockFileSystem();
+    mockFileSystem.AddFile("test.txt", new MockFileData("File content"));
+
+    var fileReader = new FileReader(mockFileSystem);
+    var result = fileReader.ReadFile("test.txt");
+
+    Assert.AreEqual("File content", result);
+}
+```
+
+Абстрактный эффект: Чтение содержимого файла.
+
+Явность в коде: Тест явно проверяет содержимое файла, используя мок файловой системы.
+# 4
+Моки не использовал, потому что по большей части как было сказано в предыдущем ответе, тестированием занимаются аналитики(отладка бизнес процессов над документами, сам проект жестко связан с внутренней закрытой апи компании).

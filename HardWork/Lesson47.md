@@ -1,244 +1,39 @@
-﻿
-Устроившись на новую работу мне все страшнее брать примеры из кода, потому делаю максимально размыто.
-# 1
+﻿### Правильный code review
 
-## Было
-Частые проверки на null.
-```cs
-public void SendContract(ProxyController proxyController, Contract contract)
-{
-    if (proxyController != null)
-    {
-        proxyController.SendContractToNDA(contract);
-    }
-}
+# 1,2,3
+Выполняю, начинаю включаться в мр и вдумчиво смотрю минимум полчаса, далее зависит от длины самого МР, пишу комментарии и после уведомляю что времени(мыслетоплива) нет и потому продолжу завтра.
+# 4
+Правильно поставленный вопрос уже носит в себе половину ответа. Мр-ы очень тяжелы, когда ты с нуля читаешь постановку задачи коллеги в жире и дополнительно смотришь его код, где нету комментариев что ты в принципе вообще делаешь, например зачем и для чего шифровать вложенные документы в base64.
+Не придерживался, буду впредь.
+# 5
+Был недавно MR который обязан был исправить проблему зомби объектов из DI. Внешней метрикой была программа dotmemory. По пикам мы видели когда вызывался GC и сколько объектов он за собой уносил, мало. MR не нес в себе ничего нового, только код + уведомление от разработчика с фотографиями dotmemory, что все теперь должно быть намного лучше.
+Других внешних метрик у нас не было, догадываюсь что нужны тесты. Тестировщика мы наняли буквально на днях, потому в проекте на данный момент нет тестов, которые контролируют производительность и правильность нашей программы.
+Тесты обязательны, после ада с перелопачиванием архитектуры и конфигураций я понял это на собственной шкуре.
+Не придерживались, надеюсь в ближайшее время нам будет легче.
 
-```
+# 6
+Придерживаюсь, завел в блокноте специально список подводных камней, на которые я очень часто натыкался:
+- включил vpn?
+- нейминг очередей правильный? с нижним подчеркиванием? смотрел сколько сейчас сообщений в артемисе?
+- Ты пытаешься вытянуть сущность из того внешнего стенда? Сделай запрос в постман руками туда
+- ты закомментировал шедулеры перед работой?
 
-## Стало
-Реализуем наследника, который будет переопределять все методы родителя, в логику можем записать или вызов исключений, или оповещение через логгер.
-```cs
-// Если посредник отключен, или неправильно подхватились конфигурации.
-public class BadProxyController : ProxyController
-{
-    public override void SendContractToNDA(Contract contract)
-    {
-	    // Logger.Fatal...
-    }
-}
+# 7 
+Придерживаемся, на каждый баг - отдельная ветка, после исправления делаем МР который обозревает команда, и влить можно только после апрува(ничего нового наверное).
 
-public void SendContract(ProxyController proxyController, Contract contract)
-{
-    proxyController.SendContractToNDA(contract);
-}
+# 8
+Не придерживаемся
+Ни тестов, ни логирования нету, из за того что менеджеры нам не давали на это времени, отчего мы выстрелили себе в ногу и делаем задачи намного медленнее и тратим на отладку в х3-4 больше времени чем могли бы, а все из за того что "быстрее быстрее и еще раз быстрее".
+Уже будем выбивать по итальянски время на все это.
 
-```
-Использовался паттерн Null Object
-# 2
+# 9
+Неизвестно.
+У нас нет большого брата, стучат по голове только если ты неоправданно долго(а бывает и оправданно) делаешь задачу.
 
-## Было
-```cs
-public void GetContracts(Trade trade)
-{
-    if (trade.Type == TradeType.Open)
-    {
-        GetOpenContracts(trade);
-    }
-    else if (trade.Type == TradeType.Closed)
-    {
-        GetClosedContracts(trade);
-    }
-}
+# 10
+Придерживаюсь.
+Если МР не на меня, все равно захожу и вставляю свои 1 копейку, гдето иф инвертнуть, гдето нейминг булевой изменить итд.
 
-```
-## Стало
-
-```cs
-public abstract class Trade
-{
-    public abstract void GetContracts();
-}
-
-public class OpenTrade : Trade
-{
-    public override void GetContracts()
-    {
-        // Логика получения контрактов из открытых торгов
-    }
-}
-
-public class ClosedTrade : Trade
-{
-    public override void GetContracts()
-    {
-	    // Проверка цифровой подписи
-        // Логика получения контрактов из закрытых торгов
-    }
-}
-
-public void GetContracts(Trade trade)
-{
-    trade.GetContracts();
-}
-
-```
-
-Использовался прием полиморфизма для обработки различных типов торгов.
-
-# 3
-
-## Было
-```cs
-public void ProcessDocument(Document document)
-{
-    if (document.Type == DocumentType.Contract)
-    {
-        ProcessContract(document);
-    }
-    else if (document.Type == DocumentType.Addendum)
-    {
-        ProcessAddendum(document);
-    }
-}
-
-```
-## Стало
-
-```cs
-public abstract class Document
-{
-    // Общие свойства и методы для всех документов
-}
-
-public class Contract : Document
-{
-    public void Process()
-    {
-        // Логика обработки договора
-        Console.WriteLine("Processing Contract");
-    }
-}
-
-public class Addendum : Document
-{
-    public void Process()
-    {
-        // Логика обработки доп соглашения
-        Console.WriteLine("Processing Addendum");
-    }
-}
-
-public class DocumentProcessor
-{
-    public void ProcessDocument(Document document)
-    {
-        switch (document)
-        {
-            case Contract contract:
-                contract.Process();
-                break;
-            case Addendum addendum:
-                addendum.Process();
-                break;
-            default:
-                throw new ArgumentException("Unknown document type");
-        }
-    }
-}
-```
-Прием - костыльный на шарпе pattern matching.
-
-# 4 
-Документы в формате xml, и поля у этого документа могут меняться в зависимости от хотелок внешнего поставщика.
-
-# Было
-```cs
-public void ValidateForm(Dictionary<string, object> data)
-{
-    if (!data.ContainsKey("name") || string.IsNullOrEmpty(data["name"] as string))
-    {
-        throw new ArgumentException("Name is required");
-    }
-    if (!data.ContainsKey("email") || string.IsNullOrEmpty(data["email"] as string))
-    {
-        throw new ArgumentException("Email is required");
-    }
-    if (!data.ContainsKey("age") || (int)data["age"] < 18)
-    {
-        throw new ArgumentException("Age must be at least 18");
-    }
-}
-
-```
-# Стало
-Простроим абстракцию валидатора xml документа.
-```cs
-using System;
-using System.Xml;
-
-public abstract class XmlFieldValidator
-{
-    public abstract void Validate(XmlDocument document);
-}
-
-public class XmlPresenceValidator : XmlFieldValidator
-{
-    private readonly string _fieldName;
-
-    public XmlPresenceValidator(string fieldName)
-    {
-        _fieldName = fieldName;
-    }
-
-    public override void Validate(XmlDocument document)
-    {
-        var node = document.SelectSingleNode($"//{_fieldName}");
-        if (node == null || string.IsNullOrEmpty(node.InnerText))
-        {
-            throw new ArgumentException($"{_fieldName} is required");
-        }
-    }
-}
-
-public class XmlAgeValidator : XmlFieldValidator
-{
-    public override void Validate(XmlDocument document)
-    {
-        var node = document.SelectSingleNode("//age");
-        if (node == null || !int.TryParse(node.InnerText, out int age) || age < 18)
-        {
-            throw new ArgumentException("Age must be at least 18");
-        }
-    }
-}
-
-public class XmlFormValidator
-{
-    private readonly XmlDocument _document;
-    private readonly XmlFieldValidator[] _validators;
-
-    public XmlFormValidator(XmlDocument document, params XmlFieldValidator[] validators)
-    {
-        _document = document;
-        _validators = validators;
-        Validate();
-    }
-
-    private void Validate()
-    {
-        foreach (var validator in _validators)
-        {
-            validator.Validate(_document);
-        }
-    }
-}
-
-```
-XmlPresenceValidator - проверяет наличие и не пустоту определенного поля
-XmlAgeValidator - проверяет уже конкретное значение.
-
-сам XmlFormValidator принимает документ для валидации и массив валидирующих параметров, можно кидать синглтоном через DI
-
-Остальные примеры очень часто пересекаются с 1 2 3 пунктами.
-# Итог
-Избавиться от ifов можно, по большей части благодаря типам и состояниям, грамотно простроив типы можно снизить явно цикломатическую сложность.
+# 11
+Не придерживаемся.
+Думаю не скоро мы сможем подключить подобные техники.

@@ -1,7 +1,7 @@
 # 1 Конфликт ioc
 
 # 1.1 до
-
+```cs
     public static IServiceCollection AddPluginServices(this IServiceCollection services)
     {
         services.TryAddScoped<IManager, BusinessManagerOld>();
@@ -14,9 +14,10 @@
         services.AddPluginDbContext<BusinessDbContext>();
         return services;
     }
+```
 
 # 1.1 после
-
+```cs
 public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddPluginServices(this IServiceCollection services)
@@ -32,7 +33,7 @@ public static class ServiceCollectionExtensions
         return services;
     }
 }
-
+```
 
 # 2 CRUD
 

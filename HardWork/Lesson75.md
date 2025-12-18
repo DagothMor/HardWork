@@ -1,1 +1,2 @@
-Завал по работе, попробую сдать на новогодних в спокойном темпе
+![](https://github.com/DagothMor/HardWork/blob/master/HardWork/Images/q#.png)]]
+Повертел DumpMachin' у, непонятно, но очень интересно :)
